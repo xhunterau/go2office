@@ -1,8 +1,21 @@
-import { type NextRequest } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
+const publicRoutes = ['/login']
+
 export async function proxy(request: NextRequest) {
-  const { supabaseResponse } = await updateSession(request)
+  const { supabaseResponse, user } = await updateSession(request)
+  const { pathname } = request.nextUrl
+  const isPublicRoute = publicRoutes.includes(pathname)
+
+  if (!user && !isPublicRoute) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  if (user && isPublicRoute) {
+    return NextResponse.redirect(new URL('/', request.url))
+  }
+
   return supabaseResponse
 }
 
