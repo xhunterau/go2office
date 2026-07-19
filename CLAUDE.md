@@ -74,3 +74,8 @@
 - **迁移优先原则**：严禁直接通过 Supabase Studio (图形界面) 手动修改生产或本地数据库结构。所有变更必须通过编写迁移文件 (`supabase/migrations/*.sql`) 实现。
 - **原子事务保障**：所有迁移 SQL 文件必须包含 `BEGIN;` 和 `COMMIT;` 事务块，确保变更执行过程中的数据安全性。
 
+# 16. 遗留数据迁移脚本同步规则
+- **适用范围**：`scripts/migration/001_products_domain_data.sql` 是 `go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` 等 Laravel 遗留表向 `products`/`brands`/`suppliers`/`origins` 正式表迁移的一次性数据搬运脚本（详见 `docs/products-domain-migration.md`），脚本内每张目标表的 `INSERT` 语句必须显式列出目标列，严禁使用 `SELECT *`。
+- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`）中**被该脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改脚本对应的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
+- **脚本退休**：该脚本仅服务于"Laravel 系统停用 + 最终生产备份导入临时表"这一次性事件，成功执行最后一次导入并清理 `go2_*` 临时表后，脚本即完成使命，可归档、无需继续长期维护。
+

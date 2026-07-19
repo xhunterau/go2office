@@ -36,6 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
+# supabase CLI local cache
+supabase/.temp
+supabase/.branches
+
 # claude code runtime state
 .claude/scheduled_tasks.lock
 

@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
+  ChevronRight,
   LayoutDashboard,
   Package,
   ShoppingCart,
@@ -10,6 +11,11 @@ import {
   Settings,
 } from "lucide-react"
 
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Sidebar,
   SidebarContent,
@@ -20,11 +26,20 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
+
+const productItems = [
+  { title: "Products", href: "/products" },
+  { title: "Brands", href: "/brands" },
+  { title: "Suppliers", href: "/suppliers" },
+  { title: "Origins", href: "/origins" },
+]
 
 const navItems = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard },
-  { title: "Products", href: "/products", icon: Package },
   { title: "Orders", href: "/orders", icon: ShoppingCart },
   { title: "Customers", href: "/customers", icon: Users },
   { title: "Settings", href: "/settings", icon: Settings },
@@ -32,6 +47,9 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const isProductsActive = productItems.some((item) =>
+    pathname.startsWith(item.href)
+  )
 
   return (
     <Sidebar collapsible="icon">
@@ -50,27 +68,78 @@ export function AppSidebar() {
           <SidebarGroupLabel>Menu</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
-                const isActive =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname.startsWith(item.href)
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname === "/"}
+                  tooltip="Dashboard"
+                >
+                  <Link href="/">
+                    <LayoutDashboard />
+                    <span>Dashboard</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
 
-                return (
-                  <SidebarMenuItem key={item.href}>
+              <Collapsible
+                asChild
+                defaultOpen={isProductsActive}
+                className="group/collapsible"
+              >
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
                     <SidebarMenuButton
-                      asChild
-                      isActive={isActive}
-                      tooltip={item.title}
+                      tooltip="Products"
+                      isActive={isProductsActive}
                     >
-                      <Link href={item.href}>
-                        <item.icon />
-                        <span>{item.title}</span>
-                      </Link>
+                      <Package />
+                      <span>Products</span>
+                      <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                     </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )
-              })}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {productItems.map((item) => {
+                        const isActive =
+                          item.href === "/products"
+                            ? pathname === "/products"
+                            : pathname.startsWith(item.href)
+
+                        return (
+                          <SidebarMenuSubItem key={item.href}>
+                            <SidebarMenuSubButton asChild isActive={isActive}>
+                              <Link href={item.href}>
+                                <span>{item.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        )
+                      })}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              {navItems
+                .filter((item) => item.href !== "/")
+                .map((item) => {
+                  const isActive = pathname.startsWith(item.href)
+
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={isActive}
+                        tooltip={item.title}
+                      >
+                        <Link href={item.href}>
+                          <item.icon />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
