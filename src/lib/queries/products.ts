@@ -1,0 +1,119 @@
+import type { SupabaseClient } from "@supabase/supabase-js"
+
+import type { Database } from "@/lib/supabase/database.types"
+
+export const PRODUCTS_PAGE_SIZE = 20
+
+// Columns fetched for the list view (kept narrow — no heavy text columns).
+const LIST_COLUMNS =
+  "id, sku, name, retail_price, image_url, is_active, brand_id, brands(name)"
+
+// A single row as returned by the list query, including the joined brand name.
+export type ProductListRow = Pick<
+  Database["public"]["Tables"]["products"]["Row"],
+  "id" | "sku" | "name" | "retail_price" | "image_url" | "is_active" | "brand_id"
+> & {
+  brands: { name: string | null } | null
+}
+
+// Parsed, validated filter state — the single source of truth shared by the
+// server query and the client filter UI. `null` means "no filter".
+export type ProductFilters = {
+  sku: string | null
+  name: string | null
+  upc: string | null
+  model: string | null
+  brandId: number | null
+  supplierId: number | null
+  status: "active" | "inactive" | null
+  isKit: boolean | null
+  page: number
+}
+
+// Escape PostgREST `ilike` wildcards so user input is matched literally.
+function escapeLike(value: string): string {
+  return value.replace(/[%_]/g, (match) => `\\${match}`)
+}
+
+// Parse raw URL search params into a typed, sanitized filter object.
+// Invalid/empty values collapse to null so they never reach the query.
+export function parseProductFilters(
+  params: Record<string, string | string[] | undefined>
+): ProductFilters {
+  const text = (key: string): string | null => {
+    const raw = params[key]
+    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim()
+    return value ? value : null
+  }
+
+  const numeric = (key: string): number | null => {
+    const value = text(key)
+    if (!value) return null
+    const parsed = Number(value)
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+  }
+
+  const statusRaw = text("status")
+  const status =
+    statusRaw === "active" || statusRaw === "inactive" ? statusRaw : null
+
+  const kitRaw = text("isKit")
+  const isKit = kitRaw === "yes" ? true : kitRaw === "no" ? false : null
+
+  const pageRaw = numeric("page")
+
+  return {
+    sku: text("sku"),
+    name: text("name"),
+    upc: text("upc"),
+    model: text("model"),
+    brandId: numeric("brandId"),
+    supplierId: numeric("supplierId"),
+    status,
+    isKit,
+    page: pageRaw ?? 1,
+  }
+}
+
+// Build and execute the paginated, filtered products list query.
+// Returns the current page rows plus the total matching count.
+export async function fetchProductList(
+  supabase: SupabaseClient<Database>,
+  filters: ProductFilters
+): Promise<{ rows: ProductListRow[]; count: number; error: string | null }> {
+  // Newest first: order by created_at (nulls last so rows missing a timestamp
+  // never float to the top), with id DESC as a stable tiebreaker. Since id is a
+  // monotonic autoincrement, it reliably reflects creation order.
+  let query = supabase
+    .from("products")
+    .select(LIST_COLUMNS, { count: "exact" })
+    .order("created_at", { ascending: false, nullsFirst: false })
+    .order("id", { ascending: false })
+
+  if (filters.sku) query = query.ilike("sku", `%${escapeLike(filters.sku)}%`)
+  if (filters.name) query = query.ilike("name", `%${escapeLike(filters.name)}%`)
+  if (filters.upc) query = query.ilike("upc", `%${escapeLike(filters.upc)}%`)
+  if (filters.model)
+    query = query.ilike("model", `%${escapeLike(filters.model)}%`)
+  if (filters.brandId !== null) query = query.eq("brand_id", filters.brandId)
+  if (filters.supplierId !== null)
+    query = query.eq("supplier_id", filters.supplierId)
+  if (filters.status !== null)
+    query = query.eq("is_active", filters.status === "active")
+  if (filters.isKit !== null) query = query.eq("is_kit", filters.isKit)
+
+  const from = (filters.page - 1) * PRODUCTS_PAGE_SIZE
+  const to = from + PRODUCTS_PAGE_SIZE - 1
+
+  const { data, count, error } = await query.range(from, to)
+
+  if (error) {
+    return { rows: [], count: 0, error: error.message }
+  }
+
+  return {
+    rows: (data ?? []) as ProductListRow[],
+    count: count ?? 0,
+    error: null,
+  }
+}

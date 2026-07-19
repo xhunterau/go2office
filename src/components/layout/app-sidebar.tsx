@@ -89,11 +89,11 @@ export function AppSidebar() {
                 <SidebarMenuItem>
                   <CollapsibleTrigger asChild>
                     <SidebarMenuButton
-                      tooltip="Products"
+                      tooltip="Catalog"
                       isActive={isProductsActive}
                     >
                       <Package />
-                      <span>Products</span>
+                      <span>Catalog</span>
                       <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
                     </SidebarMenuButton>
                   </CollapsibleTrigger>
