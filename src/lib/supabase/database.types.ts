@@ -6,7 +6,7 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
-// NOTE: This file mirrors supabase/migrations/*_create_products_domain_tables.sql.
+// NOTE: This file mirrors the tables defined in supabase/migrations/*.sql.
 // The generated CLI (`supabase gen types`) requires Docker/podman or `supabase login`,
 // neither of which is available in this environment, so it is maintained by hand.
 // Regenerate with the CLI once a container runtime or login is available.
@@ -175,6 +175,48 @@ export type Database = {
             columns: ["supplier_id"]
             isOneToOne: false
             referencedRelation: "suppliers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      product_kit_items: {
+        Row: {
+          id: number
+          kit_product_id: number
+          component_product_id: number
+          qty: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          kit_product_id: number
+          component_product_id: number
+          qty: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          kit_product_id?: number
+          component_product_id?: number
+          qty?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_kit_items_kit_product_id_fkey"
+            columns: ["kit_product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "product_kit_items_component_product_id_fkey"
+            columns: ["component_product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
             referencedColumns: ["id"]
           },
         ]

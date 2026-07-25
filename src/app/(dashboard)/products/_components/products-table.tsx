@@ -120,18 +120,22 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
                   <div className="flex justify-end gap-1">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            disabled
-                            aria-label="Edit"
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          asChild
+                          aria-label="Edit"
+                        >
+                          <Link
+                            href={`/products/${product.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                           >
                             <Pencil />
-                          </Button>
-                        </span>
+                          </Link>
+                        </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Coming soon</TooltipContent>
+                      <TooltipContent>Edit</TooltipContent>
                     </Tooltip>
                     <Button
                       variant="ghost"

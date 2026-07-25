@@ -75,7 +75,17 @@
 - **原子事务保障**：所有迁移 SQL 文件必须包含 `BEGIN;` 和 `COMMIT;` 事务块，确保变更执行过程中的数据安全性。
 
 # 16. 遗留数据迁移脚本同步规则
-- **适用范围**：`scripts/migration/001_products_domain_data.sql` 是 `go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` 等 Laravel 遗留表向 `products`/`brands`/`suppliers`/`origins` 正式表迁移的一次性数据搬运脚本（详见 `docs/products-domain-migration.md`），脚本内每张目标表的 `INSERT` 语句必须显式列出目标列，严禁使用 `SELECT *`。
-- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`）中**被该脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改脚本对应的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
-- **脚本退休**：该脚本仅服务于"Laravel 系统停用 + 最终生产备份导入临时表"这一次性事件，成功执行最后一次导入并清理 `go2_*` 临时表后，脚本即完成使命，可归档、无需继续长期维护。
+- **适用范围**：`scripts/migration/*.sql` 是 Laravel 遗留表向正式表迁移的一次性数据搬运脚本，脚本内每张目标表的 `INSERT` 语句必须显式列出目标列，严禁使用 `SELECT *`。当前脚本清单：
+  - `001_products_domain_data.sql`：`go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` → `products`/`brands`/`suppliers`/`origins`（详见 `docs/products-domain-migration.md`）
+  - `002_product_kits_data.sql`：`go2_kits` → `product_kit_items`（详见 `docs/product-kits-migration.md`）
+- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`/`product_kit_items`）中**被脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改对应脚本的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
+- **脚本退休**：这些脚本仅服务于"Laravel 系统停用 + 最终生产备份导入临时表"这一次性事件，成功执行最后一次导入并清理 `go2_*` 临时表后，脚本即完成使命，可归档、无需继续长期维护。
+
+# 17. 环境变量读取规则（.env.local）
+- **严禁 source**：在 shell 中取 `.env.local` 的值时，**严禁**使用 `source .env.local` / `. .env.local`（无论是否配合 `set -a`）。该文件会被当作脚本执行：值里的 `$xxx` 被展开、`$(...)` 被真实执行。
+- **背景**：`DATABASE_URL` 的密码含 `$`。实测（2026-07-25）`bash source` 把 `$3` 当位置参数吞掉，`@next/env` 内置的 dotenv-expand 把 `$3195bb` 整段当变量名展开为空。**两者都静默产出一个只是短了几个字符的值**，故障表现为 `password authentication failed`，极易误诊为"密码错误"。**加单引号只能挡住 bash，挡不住 dotenv-expand**。
+- **正确取法（二选一）**：
+  - 让工具自己读：`npx dotenv-cli -e .env.local -- <command>`
+  - 字面解析、不做展开：`VAL=$(grep -m1 '^KEY=' .env.local | cut -d= -f2-)`
+- **新增变量约束**：若新变量的值含 `$`，必须在 `.env.local` 中写成 `\$` 转义（这是唯一在 bash 与 dotenv-expand 下均正确的写法），且此时上面的 `grep | cut` 取法需先 unescape，两种取法不可混用。能避开 `$` 时优先选用不含 `$` 的值。
 

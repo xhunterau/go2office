@@ -16,6 +16,36 @@ export type ProductListRow = Pick<
   brands: { name: string | null } | null
 }
 
+// Lookup options for the brand / origin / supplier selects. Shared by the list
+// page (filters + create dialog) and the detail page (section edit dialog).
+export type ProductLookupOptions = {
+  brands: { id: number; name: string | null }[]
+  origins: { id: number; name: string | null }[]
+  suppliers: { id: number; company_name: string | null }[]
+  error: string | null
+}
+
+export async function fetchProductLookupOptions(
+  supabase: SupabaseClient<Database>
+): Promise<ProductLookupOptions> {
+  const [brands, suppliers, origins] = await Promise.all([
+    supabase.from("brands").select("id, name").order("name"),
+    supabase.from("suppliers").select("id, company_name").order("company_name"),
+    supabase.from("origins").select("id, name").order("name"),
+  ])
+
+  return {
+    brands: brands.data ?? [],
+    origins: origins.data ?? [],
+    suppliers: suppliers.data ?? [],
+    error:
+      brands.error?.message ??
+      suppliers.error?.message ??
+      origins.error?.message ??
+      null,
+  }
+}
+
 // Parsed, validated filter state — the single source of truth shared by the
 // server query and the client filter UI. `null` means "no filter".
 export type ProductFilters = {

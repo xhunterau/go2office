@@ -21,3 +21,11 @@ const UNIQUE_VIOLATION = "23505"
 export function isUniqueViolation(error: { code?: string } | null): boolean {
   return error?.code === UNIQUE_VIOLATION
 }
+
+// Postgres CHECK-constraint violation, e.g. a non-positive kit quantity or a
+// kit listing itself as its own component.
+const CHECK_VIOLATION = "23514"
+
+export function isCheckViolation(error: { code?: string } | null): boolean {
+  return error?.code === CHECK_VIOLATION
+}

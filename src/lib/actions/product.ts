@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { randomUUID } from "node:crypto"
 
+import type { Database } from "@/lib/supabase/database.types"
 import { createClient } from "@/lib/supabase/server"
 import {
   isForeignKeyViolation,
@@ -11,9 +12,15 @@ import {
 } from "@/lib/actions/action-result"
 import {
   productCreateSchema,
+  productSectionSchemas,
   DEFAULT_DIMENSION,
   type ProductCreateInput,
+  type ProductSection,
 } from "@/lib/validations/product"
+import {
+  PRODUCT_IMAGES_BUCKET,
+  objectPathFromPublicUrl,
+} from "@/lib/storage/product-images"
 
 const PATH = "/products"
 
@@ -129,6 +136,108 @@ export async function createProduct(
 
   revalidatePath(PATH)
   return { success: true, data: { id: inserted.id } }
+}
+
+type ProductUpdate = Database["public"]["Tables"]["products"]["Update"]
+
+// Turn a validated section payload into a DB update: every text value gets
+// trimmed and empty strings become NULL, so blanking an optional field clears
+// the column instead of storing "".
+function toUpdatePayload(values: Record<string, unknown>): ProductUpdate {
+  const entries = Object.entries(values).map(([key, value]) => [
+    key,
+    typeof value === "string" ? toNullable(value) : value,
+  ])
+  return Object.fromEntries(entries) as ProductUpdate
+}
+
+// Delete the previously uploaded image once it has been replaced. Best effort:
+// a failure here must never block the update, and legacy external URLs (which
+// are not ours to delete) resolve to a null path and are skipped.
+async function removeReplacedImage(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  previousUrl: string | null,
+  nextUrl: string | null
+): Promise<void> {
+  if (previousUrl === nextUrl) return
+  const path = objectPathFromPublicUrl(previousUrl)
+  if (!path) return
+  await supabase.storage.from(PRODUCT_IMAGES_BUCKET).remove([path])
+}
+
+// Update one section of a product (see PRODUCT_SECTION_FIELDS). A single action
+// dispatches on `section` rather than one action per card, so the schema, error
+// mapping and revalidation live in one place.
+export async function updateProductSection(
+  id: number,
+  section: ProductSection,
+  input: unknown
+): Promise<ActionResult> {
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid product id" }
+  }
+
+  const schema = productSectionSchemas[section]
+  if (!schema) return { success: false, error: "Unknown section" }
+
+  const parsed = schema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    }
+  }
+
+  const payload = toUpdatePayload(parsed.data)
+  const supabase = await createClient()
+
+  // Read the current image before overwriting it so the old object can be
+  // cleaned up afterwards.
+  let previousImageUrl: string | null = null
+  if (section === "details") {
+    const { data: current } = await supabase
+      .from("products")
+      .select("image_url")
+      .eq("id", id)
+      .maybeSingle()
+    previousImageUrl = current?.image_url ?? null
+  }
+
+  // updated_at is maintained by the moddatetime trigger (migration
+  // 20260719150000), so it is never set here.
+  const { data: updated, error } = await supabase
+    .from("products")
+    .update(payload)
+    .eq("id", id)
+    .select("id")
+    .maybeSingle()
+
+  if (error) {
+    if (isForeignKeyViolation(error)) {
+      return {
+        success: false,
+        error: "The selected brand, origin or supplier no longer exists.",
+      }
+    }
+    if (isUniqueViolation(error)) {
+      return { success: false, error: "That value is already taken." }
+    }
+    return { success: false, error: error.message }
+  }
+
+  if (!updated) return { success: false, error: "Product not found" }
+
+  if (section === "details") {
+    await removeReplacedImage(
+      supabase,
+      previousImageUrl,
+      (payload.image_url as string | null) ?? null
+    )
+  }
+
+  revalidatePath(PATH)
+  revalidatePath(`${PATH}/${id}`)
+  return { success: true }
 }
 
 export async function deleteProduct(id: number): Promise<ActionResult> {

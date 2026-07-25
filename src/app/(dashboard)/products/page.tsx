@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server"
 import {
   fetchProductList,
+  fetchProductLookupOptions,
   parseProductFilters,
   PRODUCTS_PAGE_SIZE,
 } from "@/lib/queries/products"
@@ -19,18 +20,12 @@ export default async function ProductsPage({
 
   const supabase = await createClient()
 
-  const [list, brandsResult, suppliersResult, originsResult] = await Promise.all([
+  const [list, lookups] = await Promise.all([
     fetchProductList(supabase, filters),
-    supabase.from("brands").select("id, name").order("name"),
-    supabase.from("suppliers").select("id, company_name").order("company_name"),
-    supabase.from("origins").select("id, name").order("name"),
+    fetchProductLookupOptions(supabase),
   ])
 
-  const loadError =
-    list.error ??
-    brandsResult.error?.message ??
-    suppliersResult.error?.message ??
-    originsResult.error?.message
+  const loadError = list.error ?? lookups.error
 
   return (
     <div className="flex flex-1 flex-col gap-4">
@@ -42,16 +37,13 @@ export default async function ProductsPage({
           </p>
         </div>
         <AddProductButton
-          brands={brandsResult.data ?? []}
-          origins={originsResult.data ?? []}
-          suppliers={suppliersResult.data ?? []}
+          brands={lookups.brands}
+          origins={lookups.origins}
+          suppliers={lookups.suppliers}
         />
       </div>
 
-      <ProductsFilters
-        brands={brandsResult.data ?? []}
-        suppliers={suppliersResult.data ?? []}
-      />
+      <ProductsFilters brands={lookups.brands} suppliers={lookups.suppliers} />
 
       {loadError ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">
