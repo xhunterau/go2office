@@ -4,17 +4,32 @@ import type { Database } from "@/lib/supabase/database.types"
 
 export const PRODUCTS_PAGE_SIZE = 20
 
+// Below this GST-exclusive margin an imported item stops reliably covering
+// per-order fulfilment overhead. Used to tint the list and as the default for
+// the "low margin" filter — a warning, never a block.
+export const LOW_MARGIN_THRESHOLD = 30
+
 // Columns fetched for the list view (kept narrow — no heavy text columns).
 const LIST_COLUMNS =
-  "id, sku, name, retail_price, image_url, is_active, brand_id, brands(name)"
+  "id, sku, name, retail_price, image_url, is_active, is_kit, brand_id, brand_name, unit_cost_aud, retail_margin_pct"
 
-// A single row as returned by the list query, including the joined brand name.
+// A single row as returned by the list query. Sourced from
+// public.product_list_pricing, which flattens the brand name and attaches cost
+// figures; kits appear with null cost columns rather than being dropped.
 export type ProductListRow = Pick<
-  Database["public"]["Tables"]["products"]["Row"],
-  "id" | "sku" | "name" | "retail_price" | "image_url" | "is_active" | "brand_id"
-> & {
-  brands: { name: string | null } | null
-}
+  Database["public"]["Views"]["product_list_pricing"]["Row"],
+  | "id"
+  | "sku"
+  | "name"
+  | "retail_price"
+  | "image_url"
+  | "is_active"
+  | "is_kit"
+  | "brand_id"
+  | "brand_name"
+  | "unit_cost_aud"
+  | "retail_margin_pct"
+>
 
 // Lookup options for the brand / origin / supplier selects. Shared by the list
 // page (filters + create dialog) and the detail page (section edit dialog).
@@ -57,6 +72,8 @@ export type ProductFilters = {
   supplierId: number | null
   status: "active" | "inactive" | null
   isKit: boolean | null
+  // Upper bound on retail margin %, for finding products priced too thin.
+  maxMargin: number | null
   page: number
 }
 
@@ -90,6 +107,12 @@ export function parseProductFilters(
   const kitRaw = text("isKit")
   const isKit = kitRaw === "yes" ? true : kitRaw === "no" ? false : null
 
+  // Margin is a percentage and may legitimately be 0 or negative, so it cannot
+  // reuse `numeric` (which requires a positive integer).
+  const marginRaw = text("maxMargin")
+  const marginParsed = marginRaw === null ? Number.NaN : Number(marginRaw)
+  const maxMargin = Number.isFinite(marginParsed) ? marginParsed : null
+
   const pageRaw = numeric("page")
 
   return {
@@ -101,6 +124,7 @@ export function parseProductFilters(
     supplierId: numeric("supplierId"),
     status,
     isKit,
+    maxMargin,
     page: pageRaw ?? 1,
   }
 }
@@ -115,7 +139,7 @@ export async function fetchProductList(
   // never float to the top), with id DESC as a stable tiebreaker. Since id is a
   // monotonic autoincrement, it reliably reflects creation order.
   let query = supabase
-    .from("products")
+    .from("product_list_pricing")
     .select(LIST_COLUMNS, { count: "exact" })
     .order("created_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
@@ -131,6 +155,11 @@ export async function fetchProductList(
   if (filters.status !== null)
     query = query.eq("is_active", filters.status === "active")
   if (filters.isKit !== null) query = query.eq("is_kit", filters.isKit)
+  // `lt` on a nullable column excludes NULLs, so kits and products with no cost
+  // drop out of a margin search — which is what you want: they have no margin to
+  // be below the threshold.
+  if (filters.maxMargin !== null)
+    query = query.lt("retail_margin_pct", filters.maxMargin)
 
   const from = (filters.page - 1) * PRODUCTS_PAGE_SIZE
   const to = from + PRODUCTS_PAGE_SIZE - 1

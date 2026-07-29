@@ -4,7 +4,7 @@
 -- This script is idempotent by design: the INSERT upserts on the primary key
 -- (which is the legacy Laravel go2_kits.id, reused verbatim), so it can be re-run
 -- safely, including the final run after the last Laravel backup is restored into
--- the go2_* tables. Per CLAUDE.md rule 16, if any column referenced below is
+-- the go2_* tables. Per CLAUDE.md rule 15, if any column referenced below is
 -- renamed/dropped/retyped on public.product_kit_items, this script must be
 -- updated in the same change.
 --

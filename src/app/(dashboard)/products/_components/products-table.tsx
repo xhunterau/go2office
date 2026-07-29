@@ -5,7 +5,9 @@ import Link from "next/link"
 import { ImageOff, Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
+import { cn } from "@/lib/utils"
 import type { ProductListRow } from "@/lib/queries/products"
+import { LOW_MARGIN_THRESHOLD } from "@/lib/queries/products"
 import { deleteProduct } from "@/lib/actions/product"
 import { useConfirm } from "@/components/providers/confirm-provider"
 import { Badge } from "@/components/ui/badge"
@@ -61,7 +63,9 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
             <TableHead className="w-16">Image</TableHead>
             <TableHead>SKU</TableHead>
             <TableHead>Name</TableHead>
+            <TableHead className="text-right">Unit Cost</TableHead>
             <TableHead className="text-right">Retail Price</TableHead>
+            <TableHead className="text-right">Margin</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="w-24 text-right">Actions</TableHead>
@@ -71,7 +75,7 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
           {products.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={7}
+                colSpan={9}
                 className="h-24 text-center text-muted-foreground"
               >
                 No products found.
@@ -102,13 +106,44 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
                     {product.sku}
                   </Link>
                 </TableCell>
-                <TableCell>{product.name ?? "—"}</TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-1.5">
+                    {product.is_kit && (
+                      <Badge
+                        variant="outline"
+                        className="border-primary/40 px-1.5 py-0 text-[10px] font-semibold uppercase text-primary"
+                      >
+                        Kit
+                      </Badge>
+                    )}
+                    <span>{product.name ?? "—"}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {/* Kits have no landed cost of their own — their roll-up is a
+                      later phase — so this stays blank rather than showing 0. */}
+                  {product.unit_cost_aud == null
+                    ? "—"
+                    : priceFormatter.format(product.unit_cost_aud)}
+                </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {product.retail_price == null
                     ? "—"
                     : priceFormatter.format(product.retail_price)}
                 </TableCell>
-                <TableCell>{product.brands?.name ?? "—"}</TableCell>
+                <TableCell
+                  className={cn(
+                    "text-right tabular-nums",
+                    product.retail_margin_pct != null &&
+                      product.retail_margin_pct < LOW_MARGIN_THRESHOLD &&
+                      "text-destructive"
+                  )}
+                >
+                  {product.retail_margin_pct == null
+                    ? "—"
+                    : `${product.retail_margin_pct.toFixed(1)}%`}
+                </TableCell>
+                <TableCell>{product.brand_name ?? "—"}</TableCell>
                 <TableCell>
                   <Badge
                     variant={product.is_active ? "default" : "secondary"}

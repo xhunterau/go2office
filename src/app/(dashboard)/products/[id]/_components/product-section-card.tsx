@@ -3,7 +3,10 @@
 import * as React from "react"
 import { Pencil } from "lucide-react"
 
-import type { ProductSection } from "@/lib/validations/product"
+import type {
+  ProductFieldKey,
+  ProductSection,
+} from "@/lib/validations/product"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import {
@@ -36,6 +39,7 @@ export function ProductSectionCard({
   rows,
   initialValues,
   lookups,
+  hiddenFields,
   className,
 }: {
   section: ProductSection
@@ -43,6 +47,7 @@ export function ProductSectionCard({
   rows: SectionRow[]
   initialValues: SectionFormValues
   lookups: SectionLookups
+  hiddenFields?: ReadonlySet<ProductFieldKey>
   className?: string
 }) {
   const [open, setOpen] = React.useState(false)
@@ -85,6 +90,7 @@ export function ProductSectionCard({
         section={section}
         initialValues={initialValues}
         lookups={lookups}
+        hiddenFields={hiddenFields}
       />
     </Card>
   )

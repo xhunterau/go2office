@@ -20,6 +20,7 @@ import {
   type SectionFormValues,
 } from "./product-fields"
 import { ProductImageField } from "./product-image-field"
+import { ProductPriceInput } from "./product-price-input"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -83,6 +84,7 @@ export function ProductSectionDialog({
   section,
   initialValues,
   lookups,
+  hiddenFields,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -90,6 +92,10 @@ export function ProductSectionDialog({
   section: ProductSection
   initialValues: SectionFormValues
   lookups: SectionLookups
+  // Fields this product derives rather than stores (a kit's cost inputs). They
+  // are not rendered, but react-hook-form still submits their default values, so
+  // the section schema keeps validating and the columns round-trip untouched.
+  hiddenFields?: ReadonlySet<ProductFieldKey>
 }) {
   const router = useRouter()
   const [isPending, startTransition] = React.useTransition()
@@ -120,18 +126,29 @@ export function ProductSectionDialog({
     })
   }
 
-  const fields = PRODUCT_SECTION_FIELDS[section] as readonly ProductFieldKey[]
+  const allFields = PRODUCT_SECTION_FIELDS[section] as readonly ProductFieldKey[]
+  const fields = hiddenFields
+    ? allFields.filter((key) => !hiddenFields.has(key))
+    : allFields
+  const hasHiddenFields = fields.length < allFields.length
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit {PRODUCT_SECTION_TITLES[section]}</DialogTitle>
-          {section === "details" && (
+          {hasHiddenFields ? (
             <DialogDescription>
-              The SKU is generated when the product is created and does not
-              change when the brand or origin is edited.
+              Cost, origin, weight and dimensions are derived from this kit&apos;s
+              components and cannot be edited here. See the Pricing tab.
             </DialogDescription>
+          ) : (
+            section === "details" && (
+              <DialogDescription>
+                The SKU is generated when the product is created and does not
+                change when the brand or origin is edited.
+              </DialogDescription>
+            )
           )}
         </DialogHeader>
 
@@ -239,6 +256,19 @@ export function ProductSectionDialog({
                               )}
                             </SelectContent>
                           </Select>
+                        ) : control.kind === "number" &&
+                          control.snap === "charm" ? (
+                          <FormControl>
+                            <ProductPriceInput
+                              name={field.name}
+                              step={control.step}
+                              placeholder={meta.placeholder}
+                              disabled={isPending}
+                              value={String(field.value ?? "")}
+                              onChange={field.onChange}
+                              onBlur={field.onBlur}
+                            />
+                          </FormControl>
                         ) : (
                           <FormControl>
                             <Input

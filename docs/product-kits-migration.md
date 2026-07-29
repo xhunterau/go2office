@@ -3,6 +3,7 @@
 > 状态：**已实现并在远端库执行完成**（2026-07-25）
 > 创建日期：2026-07-25
 > 前置文档：`docs/products-domain-migration.md`（products/brands/suppliers/origins 已迁移完成）
+> 后续文档：`docs/product-kit-pricing.md`（2026-07-29）—— 基于本表的成本卷积与派生属性。本文 §2 记录的三项数据现状（空套装、无嵌套、`qty` 分布）在那里直接决定了实现细节，其中「空套装」数已由 23 增至 **24**。
 
 ## 1. 目标
 
@@ -62,7 +63,7 @@
 
 ## 5. Schema 迁移设计
 
-文件：`supabase/migrations/20260725110000_create_product_kit_items.sql`（按规则 15 包 `BEGIN` / `COMMIT`）
+文件：`supabase/migrations/20260725110000_create_product_kit_items.sql`（按规则 14 包 `BEGIN` / `COMMIT`）
 
 ```
 CREATE TABLE public.product_kit_items (
@@ -87,11 +88,11 @@ CREATE TABLE public.product_kit_items (
 文件：`scripts/migration/002_product_kits_data.sql`
 
 - 单条 `INSERT ... SELECT ... FROM public.go2_kits ... ON CONFLICT (id) DO UPDATE SET ...`，幂等。
-- **显式列出目标列**，不使用 `SELECT *`（规则 16）。
+- **显式列出目标列**，不使用 `SELECT *`（规则 15）。
 - 防御性过滤：只搬运两侧商品都已存在于 `public.products` 的行（用 `EXISTS` 判断）。当前实测应过滤掉 0 行；此过滤是为最终同步兜底——若届时 Laravel 侧新增了指向软删除商品的明细行，脚本会跳过而非因 FK 冲突整体回滚。
 - 脚本尾部保留一段**注释形式的诊断查询**，用于人工确认本次被跳过的行数与具体 id。
 - 结尾 `setval` 把 `product_kit_items` 的 id 序列推到 `max(id) + 1`，避免应用新建行与迁移行 id 冲突。
-- **规则 16 需扩展**：CLAUDE.md 第 16 条目前只点名 `001_products_domain_data.sql`，本次需把 `002_product_kits_data.sql` 及 `product_kit_items` 表纳入同步约束范围（同一次改动中更新 CLAUDE.md）。
+- **规则 15 需扩展**：CLAUDE.md 第 15 条目前只点名 `001_products_domain_data.sql`，本次需把 `002_product_kits_data.sql` 及 `product_kit_items` 表纳入同步约束范围（同一次改动中更新 CLAUDE.md）。
 
 ## 7. UI / 应用层设计（Kit Components tab）
 
@@ -139,7 +140,7 @@ CREATE TABLE public.product_kit_items (
 **修改**
 - `src/app/(dashboard)/products/[id]/page.tsx`（拉取明细、替换 kit 占位 slot）
 - `src/lib/supabase/database.types.ts`（重新生成）
-- `CLAUDE.md`（规则 16 纳入 002 脚本）
+- `CLAUDE.md`（规则 15 纳入 002 脚本）
 - `docs/existing_schema.md`（若届时已建立，补充新表）
 
 ## 9. 执行与验证
@@ -150,7 +151,7 @@ CREATE TABLE public.product_kit_items (
    npx supabase db push --db-url "$DB_URL" --dry-run   # 先确认待应用列表
    npx supabase db push --db-url "$DB_URL"
    ```
-   （**严禁** `source .env.local`，见 CLAUDE.md 规则 17）
+   （**严禁** `source .env.local`，见 CLAUDE.md 规则 16）
 2. 执行数据脚本（`npx supabase db query --db-url "$DB_URL" "$(cat scripts/migration/002_product_kits_data.sql)"` 或 psql 等价方式）。
 3. 验证：
    - `SELECT count(*) FROM product_kit_items;` 应为 **699**
@@ -166,15 +167,15 @@ CREATE TABLE public.product_kit_items (
 - 数据脚本已执行：`INSERT 0 699`，序列 `setval` 到 709。
 - 验证：`699` 行 / `616` 个套装，两侧孤儿引用 0，与 `go2_kits` 逐字段（含 `created_at`/`updated_at` 时区转换）对比 **0 处不一致**。
 - 幂等性：脚本重跑一次后仍为 `699` 行 / `616` 个套装；`updated_at` 全部被 `moddatetime` 刷新为 `now()`，与第 4 节记录的既有行为一致。
-- **执行方式注意**：`supabase db query` 一次只接受**单条语句**（`cannot insert multiple commands into a prepared statement`），且以 `--` 开头的 SQL 会被当作命令行 flag。本次是把脚本按语句拆开、用 `--file` 逐条执行；脚本本身保留 `BEGIN`/`COMMIT`（规则 15），供 `psql` 一次性执行。
+- **执行方式注意**：`supabase db query` 一次只接受**单条语句**（`cannot insert multiple commands into a prepared statement`），且以 `--` 开头的 SQL 会被当作命令行 flag。本次是把脚本按语句拆开、用 `--file` 逐条执行；脚本本身保留 `BEGIN`/`COMMIT`（规则 14），供 `psql` 一次性执行。
 
 ## 10. 风险与注意事项
 
 - 本次是第一次给这批明细数据加上真正的约束（PK/FK/UNIQUE/CHECK）。当前数据 100% 满足，但若 Laravel 停用前又产生了违规数据（重复组件、`qty <= 0`、自引用、指向软删除商品），最终同步时会报冲突或被跳过，需人工介入。
 - 按决策 `is_kit` 与明细行**不联动**，因此可能出现两类不一致状态：`is_kit = true` 但无明细（当前 23 个），以及 `is_kit = false` 却有明细（当前 0 个，但 DB 层不阻止）。后者会导致 `Kit Components` tab 因 `showKitTab = product.is_kit` 而**不显示**、明细被隐藏。建议在商品列表/详情后续迭代中增加一处数据体检视图，而不是靠约束堵。
 - 组件商品 FK 为 `RESTRICT`，意味着删除商品时可能被套装明细挡住。商品删除功能上线时需要给出清晰错误提示（当前商品域尚无删除入口）。
-- 不支持嵌套套装（DB 层不禁止，但 UI 与后续 BOM 展开逻辑均按单层假设实现）。若日后业务需要多层套装，需重新评估递归展开与循环引用检测。
-- `go2_kits` 临时表在最后一次导入并核对完成后可随其他 `go2_*` 表一并清理，脚本 002 随之退休（同规则 16 的脚本退休条款）。
+- 不支持嵌套套装（DB 层不禁止，但 UI 与后续 BOM 展开逻辑均按单层假设实现）。若日后业务需要多层套装，需重新评估递归展开与循环引用检测。**成本卷积按同一假设实现**：组件本身是套装时整个套装成本输出 NULL 而非静默少算，见 `docs/product-kit-pricing.md` §4.5。
+- `go2_kits` 临时表在最后一次导入并核对完成后可随其他 `go2_*` 表一并清理，脚本 002 随之退休（同规则 15 的脚本退休条款）。
 
 ---
 

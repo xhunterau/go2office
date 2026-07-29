@@ -13,7 +13,10 @@ type ProductRow = Database["public"]["Tables"]["products"]["Row"]
 // timestamps each need their own treatment.
 type FieldControl =
   | { kind: "text" }
-  | { kind: "number"; step: string }
+  // `snap: "charm"` routes the field through ProductPriceInput, which rounds the
+  // entered value to .95 cents on blur — the same rule the suggested retail
+  // price uses, so a hand-typed price lands on the same grid.
+  | { kind: "number"; step: string; snap?: "charm" }
   | { kind: "textarea"; rows: number }
   | { kind: "switch" }
   | { kind: "lookup"; source: "brands" | "origins" | "suppliers" }
@@ -42,7 +45,7 @@ export const PRODUCT_FIELD_META: Record<
   },
   retail_price: {
     label: "Retail Price",
-    control: { kind: "number", step: "0.01" },
+    control: { kind: "number", step: "0.01", snap: "charm" },
     placeholder: "Optional",
   },
   is_gst: { label: "GST", control: { kind: "switch" } },
@@ -84,6 +87,24 @@ export const PRODUCT_FIELD_META: Record<
   is_active: { label: "Active", control: { kind: "switch" } },
   is_kit: { label: "Kit", control: { kind: "switch" } },
 }
+
+// Columns a kit does not own: they are rolled up from its components by
+// public.product_pricing, and the values stored on the kit row itself are legacy
+// placeholders nothing reads. Hidden from the edit dialog so nobody fills in a
+// number that will never be used; the overview shows the derived value instead.
+//
+// `retail_price` is deliberately absent — a kit's shelf price is a decision, not
+// a derivation.
+export const KIT_DERIVED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
+  "origin_id",
+  "currency",
+  "purchase_price",
+  "is_gst",
+  "weight",
+  "length",
+  "width",
+  "height",
+])
 
 // Title shown on each overview card / edit dialog.
 export const PRODUCT_SECTION_TITLES: Record<ProductSection, string> = {

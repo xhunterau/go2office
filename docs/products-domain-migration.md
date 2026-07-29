@@ -86,7 +86,7 @@
 
 - **Schema 迁移**：`supabase/migrations/<timestamp>_create_products_domain_tables.sql`
   - 纯 DDL：建表、约束、索引、RLS、GRANT
-  - 按规则 15 使用 `BEGIN` / `COMMIT` 事务块
+  - 按规则 14 使用 `BEGIN` / `COMMIT` 事务块
 - **数据迁移脚本**：`scripts/migration/001_products_domain_data.sql`
   - 非 schema migration，属于一次性数据搬运
   - 每张表一段 `INSERT ... SELECT ... FROM go2_xxx ON CONFLICT (id) DO UPDATE SET ...`

@@ -210,7 +210,7 @@ SKU 由 `brandAbbr + 五位 id + originAbbr` 生成（`product.ts:28`），一�
 遗留数据是外链 URL，因此 `image_url` 仍是 text 列，Storage 只是「新图片的来源之一」，两种 URL 并存：
 
 - **Bucket**：`product-images`，**public read**（渲染简单，且与遗留外链行为一致），写入仅限 `authenticated`。
-- **迁移**：新增 `supabase/migrations/*_create_product_images_bucket.sql`，含 `BEGIN/COMMIT`（规则 15），插入 bucket 记录 + 4 条 `storage.objects` policy（public SELECT，authenticated INSERT/UPDATE/DELETE，均限定 `bucket_id = 'product-images'`）。
+- **迁移**：新增 `supabase/migrations/*_create_product_images_bucket.sql`，含 `BEGIN/COMMIT`（规则 14），插入 bucket 记录 + 4 条 `storage.objects` policy（public SELECT，authenticated INSERT/UPDATE/DELETE，均限定 `bucket_id = 'product-images'`）。
 - **上传路径**：`products/{productId}/{uuid}.{ext}`。
 - **上传方式**：**浏览器端直传**（`@/lib/supabase/client` 的 browser client 带认证 cookie），拿到 public URL 后再由 Server Action 落库。不走 Server Action 传文件——Next.js Server Action 默认 body 上限 1MB，商品图会超限，直传同时避开该限制且不占用 Node 进程。
 - **校验**：客户端限图片 MIME（`image/*`）+ 5MB 上限；`image_url` 的 Zod 规则为可空 URL 字符串。

@@ -4,6 +4,7 @@ import * as React from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Search, X } from "lucide-react"
 
+import { LOW_MARGIN_THRESHOLD } from "@/lib/queries/products"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -22,6 +23,14 @@ const ALL = "all"
 
 const TEXT_FIELDS = ["sku", "name", "upc", "model"] as const
 type TextField = (typeof TEXT_FIELDS)[number]
+
+// Thresholds worth scanning for. LOW_MARGIN_THRESHOLD is the one the table
+// tints red, so it leads.
+const MARGIN_OPTIONS = [
+  { value: String(LOW_MARGIN_THRESHOLD), label: `Below ${LOW_MARGIN_THRESHOLD}%` },
+  { value: "50", label: "Below 50%" },
+  { value: "0", label: "Losing money" },
+]
 
 const TEXT_LABELS: Record<TextField, string> = {
   sku: "SKU",
@@ -57,7 +66,7 @@ export function ProductsFilters({
   )
 
   const hasFilters = TEXT_FIELDS.some((f) => searchParams.get(f)) ||
-    ["brandId", "supplierId", "status", "isKit"].some((k) =>
+    ["brandId", "supplierId", "status", "isKit", "maxMargin"].some((k) =>
       searchParams.get(k)
     )
 
@@ -117,6 +126,16 @@ export function ProductsFilters({
         onChange={(v) => commit({ isKit: v === ALL ? null : v })}
       />
 
+      {/* Kits and products with no cost have no margin, so they are excluded
+          whenever this filter is active — they cannot be "below" a threshold. */}
+      <SelectFilter
+        label="Margin"
+        value={searchParams.get("maxMargin") ?? ALL}
+        placeholder="All"
+        options={MARGIN_OPTIONS}
+        onChange={(v) => commit({ maxMargin: v === ALL ? null : v })}
+      />
+
       {hasFilters && (
         <Button
           variant="ghost"
@@ -130,6 +149,7 @@ export function ProductsFilters({
               supplierId: null,
               status: null,
               isKit: null,
+              maxMargin: null,
             })
           }
         >

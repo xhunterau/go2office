@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-export const PRODUCT_TABS = ["overview", "stock", "kit"] as const
+export const PRODUCT_TABS = ["overview", "pricing", "stock", "kit"] as const
 export type ProductTab = (typeof PRODUCT_TABS)[number]
 
 // Panels arrive as slots so the Overview stays a Server Component — this
@@ -13,11 +13,13 @@ export type ProductTab = (typeof PRODUCT_TABS)[number]
 export function ProductDetailTabs({
   showKitTab,
   overview,
+  pricing,
   stock,
   kit,
 }: {
   showKitTab: boolean
   overview: React.ReactNode
+  pricing: React.ReactNode
   stock: React.ReactNode
   kit: React.ReactNode
 }) {
@@ -27,7 +29,9 @@ export function ProductDetailTabs({
 
   const requested = searchParams.get("tab")
   const active: ProductTab =
-    requested === "stock" || (requested === "kit" && showKitTab)
+    requested === "stock" ||
+    requested === "pricing" ||
+    (requested === "kit" && showKitTab)
       ? requested
       : "overview"
 
@@ -47,11 +51,13 @@ export function ProductDetailTabs({
     <Tabs value={active} onValueChange={handleChange} className="gap-4">
       <TabsList>
         <TabsTrigger value="overview">Overview</TabsTrigger>
+        <TabsTrigger value="pricing">Pricing</TabsTrigger>
         <TabsTrigger value="stock">Stock</TabsTrigger>
         {showKitTab && <TabsTrigger value="kit">Kit Components</TabsTrigger>}
       </TabsList>
 
       <TabsContent value="overview">{overview}</TabsContent>
+      <TabsContent value="pricing">{pricing}</TabsContent>
       <TabsContent value="stock">{stock}</TabsContent>
       {showKitTab && <TabsContent value="kit">{kit}</TabsContent>}
     </Tabs>

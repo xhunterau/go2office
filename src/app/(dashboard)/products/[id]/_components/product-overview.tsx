@@ -1,6 +1,8 @@
 import type { Database } from "@/lib/supabase/database.types"
 import type { ProductSection } from "@/lib/validations/product"
-import { toSectionFormValues } from "./product-fields"
+import type { ProductPricing } from "@/lib/queries/product-pricing"
+import { formatDimensions, formatWeight } from "@/lib/pricing"
+import { KIT_DERIVED_FIELDS, toSectionFormValues } from "./product-fields"
 import {
   ProductSectionCard,
   type SectionRow,
@@ -36,16 +38,78 @@ function yesNo(value: boolean | null): string {
   return value ? "Yes" : "No"
 }
 
-function formatDimensions(product: ProductDetail): string {
-  const parts = [product.length, product.width, product.height]
-  if (parts.some((part) => part === null)) return "—"
-  return parts.join(" × ")
+// Marks a value the kit derives from its components rather than stores.
+function derived(value: string): React.ReactNode {
+  return (
+    <span className="flex flex-wrap items-baseline gap-1.5">
+      {value}
+      <span className="text-xs text-muted-foreground">Derived</span>
+    </span>
+  )
 }
 
 // The read-only rows of every card. Kept explicit (rather than derived from the
 // field metadata) because each column has its own display rules: prices are
 // currency-formatted, foreign keys show the joined label, timestamps localize.
-function sectionRows(product: ProductDetail): Record<ProductSection, SectionRow[]> {
+//
+// A kit reads its cost inputs off `pricing` instead of off its own row: the
+// columns on the row are legacy placeholders (zeros, or a roll-up the old system
+// froze at some past exchange rate) that nothing else uses.
+function sectionRows(
+  product: ProductDetail,
+  pricing: ProductPricing | null
+): Record<ProductSection, SectionRow[]> {
+  const isKit = product.is_kit
+
+  const commercial: SectionRow[] = isKit
+    ? [
+        { label: "Currency", value: derived("AUD") },
+        { label: "GST", value: derived("No") },
+        {
+          label: "Purchase Price",
+          value: derived(formatPrice(pricing?.unit_cost_aud ?? null, "AUD")),
+        },
+        {
+          label: "Retail Price",
+          value: formatPrice(product.retail_price, product.currency),
+        },
+        {
+          label: "Weight",
+          value: derived(formatWeight(pricing?.weight ?? null)),
+        },
+        {
+          label: "Dimensions (L × W × H)",
+          value: derived(
+            formatDimensions(
+              pricing?.length_mm ?? null,
+              pricing?.width_mm ?? null,
+              pricing?.height_mm ?? null
+            )
+          ),
+        },
+      ]
+    : [
+        { label: "Currency", value: display(product.currency) },
+        { label: "GST", value: yesNo(product.is_gst) },
+        {
+          label: "Purchase Price",
+          value: formatPrice(product.purchase_price, product.currency),
+        },
+        {
+          label: "Retail Price",
+          value: formatPrice(product.retail_price, product.currency),
+        },
+        { label: "Weight", value: formatWeight(product.weight) },
+        {
+          label: "Dimensions (L × W × H)",
+          value: formatDimensions(
+            product.length,
+            product.width,
+            product.height
+          ),
+        },
+      ]
+
   return {
     details: [
       { label: "Name", value: display(product.name) },
@@ -54,7 +118,14 @@ function sectionRows(product: ProductDetail): Record<ProductSection, SectionRow[
         value: <span className="font-mono">{product.sku}</span>,
       },
       { label: "Brand", value: display(product.brands?.name) },
-      { label: "Origin", value: display(product.origins?.name) },
+      {
+        label: "Origin",
+        // A kit is assembled here out of stock that already paid its import
+        // freight, so it is always a local purchase whatever the row says.
+        value: isKit
+          ? derived("Local Purchase")
+          : display(product.origins?.name),
+      },
       { label: "Supplier", value: display(product.suppliers?.company_name) },
       { label: "Model", value: display(product.model) },
       { label: "UPC", value: display(product.upc) },
@@ -70,20 +141,7 @@ function sectionRows(product: ProductDetail): Record<ProductSection, SectionRow[
       },
       { label: "Comment", value: display(product.comment), fullWidth: true },
     ],
-    commercial: [
-      { label: "Currency", value: display(product.currency) },
-      { label: "GST", value: yesNo(product.is_gst) },
-      {
-        label: "Purchase Price",
-        value: formatPrice(product.purchase_price, product.currency),
-      },
-      {
-        label: "Retail Price",
-        value: formatPrice(product.retail_price, product.currency),
-      },
-      { label: "Weight", value: display(product.weight) },
-      { label: "Dimensions (L × W × H)", value: formatDimensions(product) },
-    ],
+    commercial,
   }
 }
 
@@ -93,11 +151,13 @@ const SECTION_ORDER: ProductSection[] = ["details", "commercial"]
 export function ProductOverview({
   product,
   lookups,
+  pricing,
 }: {
   product: ProductDetail
   lookups: SectionLookups
+  pricing: ProductPricing | null
 }) {
-  const rows = sectionRows(product)
+  const rows = sectionRows(product, pricing)
 
   return (
     <div className="flex flex-col gap-4">
@@ -112,6 +172,7 @@ export function ProductOverview({
             rows={rows[section]}
             initialValues={toSectionFormValues(product, section)}
             lookups={lookups}
+            hiddenFields={product.is_kit ? KIT_DERIVED_FIELDS : undefined}
           />
         ))}
       </div>

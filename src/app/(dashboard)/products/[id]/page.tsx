@@ -4,6 +4,10 @@ import { Warehouse } from "lucide-react"
 import { createClient } from "@/lib/supabase/server"
 import { fetchProductLookupOptions } from "@/lib/queries/products"
 import { fetchProductKitItems } from "@/lib/queries/product-kit-items"
+import {
+  fetchKitComponentCosts,
+  fetchProductPricing,
+} from "@/lib/queries/product-pricing"
 import { ProductDetailHeader } from "./_components/product-detail-header"
 import { ProductDetailTabs } from "./_components/product-detail-tabs"
 import {
@@ -13,6 +17,7 @@ import {
 import { ProductKitPanel } from "./_components/product-kit-panel"
 import { ProductOverview } from "./_components/product-overview"
 import { ProductPlaceholderPanel } from "./_components/product-placeholder-panel"
+import { ProductPricingPanel } from "./_components/product-pricing-panel"
 
 export default async function ProductDetailPage({
   params,
@@ -45,11 +50,19 @@ export default async function ProductDetailPage({
 
   const product = data as ProductDetail
 
-  // Only kits have a Kit Components tab, so the composition query is skipped
-  // entirely for regular products.
-  const kit = product.is_kit
-    ? await fetchProductKitItems(supabase, product.id)
-    : { items: [], error: null }
+  // Only kits have a Kit Components tab and a per-component cost breakdown, so
+  // both of those queries are skipped for regular products. Pricing itself is
+  // fetched for everything: the view now covers kits too, rolling their cost up
+  // from their components.
+  const [kit, pricing, componentCosts] = await Promise.all([
+    product.is_kit
+      ? fetchProductKitItems(supabase, product.id)
+      : Promise.resolve({ items: [], error: null }),
+    fetchProductPricing(supabase, product.id),
+    product.is_kit
+      ? fetchKitComponentCosts(supabase, product.id)
+      : Promise.resolve({ costs: [], error: null }),
+  ])
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -57,7 +70,22 @@ export default async function ProductDetailPage({
 
       <ProductDetailTabs
         showKitTab={product.is_kit}
-        overview={<ProductOverview product={product} lookups={lookups} />}
+        overview={
+          <ProductOverview
+            product={product}
+            lookups={lookups}
+            pricing={pricing.pricing}
+          />
+        }
+        pricing={
+          <ProductPricingPanel
+            pricing={pricing.pricing}
+            error={pricing.error}
+            kitItems={kit.items}
+            kitCosts={componentCosts.costs}
+            kitCostsError={componentCosts.error}
+          />
+        }
         stock={
           <ProductPlaceholderPanel
             icon={Warehouse}
