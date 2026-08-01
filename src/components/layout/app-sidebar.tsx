@@ -9,6 +9,7 @@ import {
   ShoppingCart,
   Users,
   Settings,
+  Warehouse,
 } from "lucide-react"
 
 import {
@@ -38,6 +39,11 @@ const productItems = [
   { title: "Origins", href: "/origins" },
 ]
 
+const inventoryItems = [
+  { title: "Stock overview", href: "/inventory" },
+  { title: "Locations", href: "/locations" },
+]
+
 const navItems = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard },
   { title: "Orders", href: "/orders", icon: ShoppingCart },
@@ -48,6 +54,9 @@ const navItems = [
 export function AppSidebar() {
   const pathname = usePathname()
   const isProductsActive = productItems.some((item) =>
+    pathname.startsWith(item.href)
+  )
+  const isInventoryActive = inventoryItems.some((item) =>
     pathname.startsWith(item.href)
   )
 
@@ -115,6 +124,41 @@ export function AppSidebar() {
                           </SidebarMenuSubItem>
                         )
                       })}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
+
+              <Collapsible
+                asChild
+                defaultOpen={isInventoryActive}
+                className="group/collapsible"
+              >
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      tooltip="Inventory"
+                      isActive={isInventoryActive}
+                    >
+                      <Warehouse />
+                      <span>Inventory</span>
+                      <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {inventoryItems.map((item) => (
+                        <SidebarMenuSubItem key={item.href}>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={pathname.startsWith(item.href)}
+                          >
+                            <Link href={item.href}>
+                              <span>{item.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
                     </SidebarMenuSub>
                   </CollapsibleContent>
                 </SidebarMenuItem>

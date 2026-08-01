@@ -278,6 +278,125 @@ export type Database = {
         }
         Relationships: []
       }
+      locations: {
+        Row: {
+          id: number
+          name: string
+          comments: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          name: string
+          comments?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          name?: string
+          comments?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      inventory_levels: {
+        Row: {
+          id: number
+          product_id: number
+          location_id: number
+          qty: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          product_id: number
+          location_id: number
+          qty?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          product_id?: number
+          location_id?: number
+          qty?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "inventory_levels_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_levels_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      // Append-only ledger. There is no Update type on purpose: authenticated
+      // holds SELECT and INSERT only (migration 20260801140000), and rows are
+      // written through the record_stock_movement / set_stock_level /
+      // move_stock functions rather than inserted directly.
+      inventory_movements: {
+        Row: {
+          id: number
+          product_id: number
+          location_id: number
+          kind: Database["public"]["Enums"]["stock_movement_kind"]
+          qty_delta: number
+          qty_after: number
+          note: string | null
+          counterpart_location_id: number | null
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          product_id: number
+          location_id: number
+          kind: Database["public"]["Enums"]["stock_movement_kind"]
+          qty_delta: number
+          qty_after: number
+          note?: string | null
+          counterpart_location_id?: number | null
+          created_by?: string | null
+          created_at?: string
+        }
+        Update: never
+        Relationships: [
+          {
+            foreignKeyName: "inventory_movements_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_movements_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "inventory_movements_counterpart_location_id_fkey"
+            columns: ["counterpart_location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       product_pricing: {
@@ -415,6 +534,19 @@ export type Database = {
           // with no components or with a component that has no cost of its own.
           unit_cost_aud: number | null
           retail_margin_pct: number | null
+          // Never null: product_stock LEFT JOINs from products, so every
+          // product gets a row (0 when it has no stock anywhere).
+          on_hand: number
+        }
+        Relationships: []
+      }
+      product_stock: {
+        Row: {
+          product_id: number
+          on_hand: number
+          location_count: number
+          // Null when no location holds a positive quantity.
+          location_names: string | null
         }
         Relationships: []
       }
@@ -424,9 +556,49 @@ export type Database = {
         Args: { value: number }
         Returns: number
       }
+      // Applies a signed delta and writes the matching ledger row. Returns the
+      // new inventory_movements.id.
+      record_stock_movement: {
+        Args: {
+          p_product_id: number
+          p_location_id: number
+          p_kind: Database["public"]["Enums"]["stock_movement_kind"]
+          p_qty_delta: number
+          p_note?: string | null
+          p_counterpart_location_id?: number | null
+        }
+        Returns: number
+      }
+      // Stocktake: sets an absolute quantity and records the difference.
+      // Returns null when the count matches what is already on file.
+      set_stock_level: {
+        Args: {
+          p_product_id: number
+          p_location_id: number
+          p_new_qty: number
+          p_note?: string | null
+        }
+        Returns: number | null
+      }
+      move_stock: {
+        Args: {
+          p_product_id: number
+          p_from_location_id: number
+          p_to_location_id: number
+          p_qty: number
+          p_note?: string | null
+        }
+        Returns: undefined
+      }
     }
     Enums: {
       currency_code: "USD" | "AUD" | "CNY"
+      stock_movement_kind:
+        | "receive"
+        | "dispatch"
+        | "adjust"
+        | "move_in"
+        | "move_out"
     }
     CompositeTypes: {
       [_ in never]: never

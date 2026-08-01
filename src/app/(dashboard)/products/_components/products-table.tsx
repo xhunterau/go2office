@@ -66,6 +66,7 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
             <TableHead className="text-right">Unit Cost</TableHead>
             <TableHead className="text-right">Retail Price</TableHead>
             <TableHead className="text-right">Margin</TableHead>
+            <TableHead className="text-right">On Hand</TableHead>
             <TableHead>Brand</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="w-24 text-right">Actions</TableHead>
@@ -75,7 +76,7 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
           {products.length === 0 ? (
             <TableRow>
               <TableCell
-                colSpan={9}
+                colSpan={10}
                 className="h-24 text-center text-muted-foreground"
               >
                 No products found.
@@ -143,10 +144,21 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
                     ? "—"
                     : `${product.retail_margin_pct.toFixed(1)}%`}
                 </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {/* Kits never hold stock of their own, so a 0 there would
+                      read as "out of stock" rather than "not applicable". */}
+                  {product.is_kit ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : product.on_hand === 0 ? (
+                    <span className="text-muted-foreground">0</span>
+                  ) : (
+                    product.on_hand
+                  )}
+                </TableCell>
                 <TableCell>{product.brand_name ?? "—"}</TableCell>
                 <TableCell>
                   <Badge
-                    variant={product.is_active ? "default" : "secondary"}
+                    variant={product.is_active ? "success" : "inactive"}
                   >
                     {product.is_active ? "Active" : "Inactive"}
                   </Badge>

@@ -76,7 +76,7 @@ export function ProductDetailHeader({ product }: { product: ProductDetail }) {
               <span className="font-mono text-sm text-muted-foreground">
                 {product.sku}
               </span>
-              <Badge variant={product.is_active ? "default" : "secondary"}>
+              <Badge variant={product.is_active ? "success" : "inactive"}>
                 {product.is_active ? "Active" : "Inactive"}
               </Badge>
               {product.is_kit && <Badge variant="outline">Kit</Badge>}

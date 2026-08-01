@@ -11,7 +11,7 @@ export const LOW_MARGIN_THRESHOLD = 30
 
 // Columns fetched for the list view (kept narrow — no heavy text columns).
 const LIST_COLUMNS =
-  "id, sku, name, retail_price, image_url, is_active, is_kit, brand_id, brand_name, unit_cost_aud, retail_margin_pct"
+  "id, sku, name, retail_price, image_url, is_active, is_kit, brand_id, brand_name, unit_cost_aud, retail_margin_pct, on_hand"
 
 // A single row as returned by the list query. Sourced from
 // public.product_list_pricing, which flattens the brand name and attaches cost
@@ -29,6 +29,7 @@ export type ProductListRow = Pick<
   | "brand_name"
   | "unit_cost_aud"
   | "retail_margin_pct"
+  | "on_hand"
 >
 
 // Lookup options for the brand / origin / supplier selects. Shared by the list

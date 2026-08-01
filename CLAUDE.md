@@ -73,7 +73,9 @@
 - **适用范围**：`scripts/migration/*.sql` 是 Laravel 遗留表向正式表迁移的一次性数据搬运脚本，脚本内每张目标表的 `INSERT` 语句必须显式列出目标列，严禁使用 `SELECT *`。当前脚本清单：
   - `001_products_domain_data.sql`：`go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` → `products`/`brands`/`suppliers`/`origins`（详见 `docs/products-domain-migration.md`）
   - `002_product_kits_data.sql`：`go2_kits` → `product_kit_items`（详见 `docs/product-kits-migration.md`）
-- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`/`product_kit_items`）中**被脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改对应脚本的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
+  - `003_inventory_data.sql`：`go2_locations`/`go2_locations_products` → `locations`/`inventory_levels`（详见 `docs/inventory-migration.md`）。`go2_warehouses` 按决策不迁移；库存行的 `EXISTS` 守卫带 `NOT p.is_kit`（套装不持有自身库存），**该条件不可删除**——删掉会让最终同步把已清除的套装库存搬回来并撞上 `inventory_levels_reject_kit_stock` 触发器
+- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`/`product_kit_items`/`locations`/`inventory_levels`）中**被脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改对应脚本的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
+- **003 脚本的额外风险**：`003` 的 `qty` 映射为 `GREATEST(源值, 0)`，每次执行都会用 Laravel 旧值**覆盖** `inventory_levels.qty`。新系统开始真实出入库后再执行它，会静默抹掉这些操作且不报错。执行前必须暂停库存写入，上线后该脚本立即退休。
 - **脚本退休**：这些脚本仅服务于"Laravel 系统停用 + 最终生产备份导入临时表"这一次性事件，成功执行最后一次导入并清理 `go2_*` 临时表后，脚本即完成使命，可归档、无需继续长期维护。
 
 # 16. 环境变量读取规则（.env.local）

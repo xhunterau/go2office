@@ -1,9 +1,13 @@
 import { notFound } from "next/navigation"
-import { Warehouse } from "lucide-react"
 
 import { createClient } from "@/lib/supabase/server"
 import { fetchProductLookupOptions } from "@/lib/queries/products"
 import { fetchProductKitItems } from "@/lib/queries/product-kit-items"
+import {
+  fetchProductMovements,
+  fetchProductStockLines,
+} from "@/lib/queries/inventory"
+import { fetchLocationOptions } from "@/lib/queries/locations"
 import {
   fetchKitComponentCosts,
   fetchProductPricing,
@@ -16,8 +20,8 @@ import {
 } from "./_components/product-detail-types"
 import { ProductKitPanel } from "./_components/product-kit-panel"
 import { ProductOverview } from "./_components/product-overview"
-import { ProductPlaceholderPanel } from "./_components/product-placeholder-panel"
 import { ProductPricingPanel } from "./_components/product-pricing-panel"
+import { ProductStockPanel } from "./_components/product-stock-panel"
 
 export default async function ProductDetailPage({
   params,
@@ -54,15 +58,28 @@ export default async function ProductDetailPage({
   // both of those queries are skipped for regular products. Pricing itself is
   // fetched for everything: the view now covers kits too, rolling their cost up
   // from their components.
-  const [kit, pricing, componentCosts] = await Promise.all([
-    product.is_kit
-      ? fetchProductKitItems(supabase, product.id)
-      : Promise.resolve({ items: [], error: null }),
-    fetchProductPricing(supabase, product.id),
-    product.is_kit
-      ? fetchKitComponentCosts(supabase, product.id)
-      : Promise.resolve({ costs: [], error: null }),
-  ])
+  // Kits are barred from holding stock (migration 20260801130000), so the three
+  // stock queries are skipped for them — the panel renders an explanation
+  // instead of a table.
+  const [kit, pricing, componentCosts, stock, movements, locations] =
+    await Promise.all([
+      product.is_kit
+        ? fetchProductKitItems(supabase, product.id)
+        : Promise.resolve({ items: [], error: null }),
+      fetchProductPricing(supabase, product.id),
+      product.is_kit
+        ? fetchKitComponentCosts(supabase, product.id)
+        : Promise.resolve({ costs: [], error: null }),
+      product.is_kit
+        ? Promise.resolve({ lines: [], error: null })
+        : fetchProductStockLines(supabase, product.id),
+      product.is_kit
+        ? Promise.resolve({ movements: [], error: null })
+        : fetchProductMovements(supabase, product.id),
+      product.is_kit
+        ? Promise.resolve({ options: [], error: null })
+        : fetchLocationOptions(supabase),
+    ])
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -87,10 +104,13 @@ export default async function ProductDetailPage({
           />
         }
         stock={
-          <ProductPlaceholderPanel
-            icon={Warehouse}
-            title="Stock management is coming soon"
-            description="On-hand quantities per location, plus stock in and out, will be managed here."
+          <ProductStockPanel
+            productId={product.id}
+            isKit={product.is_kit}
+            lines={stock.lines}
+            movements={movements.movements}
+            locations={locations.options}
+            error={stock.error ?? movements.error ?? locations.error}
           />
         }
         kit={

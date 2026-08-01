@@ -70,7 +70,7 @@ export function ProductKitItemsTable({
                       {sku}
                     </Link>
                     {component && !component.is_active && (
-                      <Badge variant="secondary">Inactive</Badge>
+                      <Badge variant="inactive">Inactive</Badge>
                     )}
                   </div>
                 </TableCell>
