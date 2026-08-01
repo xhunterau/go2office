@@ -14,6 +14,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -28,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ProductRetailPriceEditor } from "./product-retail-price-editor"
 
 // How each origin bills freight, spelled out so the panel explains the number
 // instead of just printing it.
@@ -92,9 +94,21 @@ export function ProductPricingPanel({
         <CardHeader>
           <CardTitle>Retail & Margin</CardTitle>
           <CardDescription>
-            Retail prices are GST-inclusive shelf prices; margin is calculated on
-            the GST-exclusive amount.
+            Retail prices are GST-inclusive shelf prices in AUD; margin is
+            calculated on the GST-exclusive amount.
           </CardDescription>
+          {/* The only editable number on this tab — everything else is derived,
+              and the retail price is set here so the cost and the suggestion
+              are on screen while it is decided. */}
+          <CardAction>
+            <ProductRetailPriceEditor
+              productId={pricing.id}
+              retailPrice={pricing.retail_price}
+              unitCost={pricing.unit_cost_aud}
+              suggestedPrice={pricing.suggested_retail_price}
+              suggestedMargin={pricing.suggested_retail_margin_pct}
+            />
+          </CardAction>
         </CardHeader>
         <CardContent className="grid gap-4 text-sm">
           <PriceBlock

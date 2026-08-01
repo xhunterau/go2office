@@ -2,7 +2,7 @@ import type { Database } from "@/lib/supabase/database.types"
 import type { ProductSection } from "@/lib/validations/product"
 import type { ProductPricing } from "@/lib/queries/product-pricing"
 import { formatDimensions, formatWeight } from "@/lib/pricing"
-import { KIT_DERIVED_FIELDS, toSectionFormValues } from "./product-fields"
+import { hiddenSectionFields, toSectionFormValues } from "./product-fields"
 import {
   ProductSectionCard,
   type SectionRow,
@@ -184,7 +184,7 @@ export function ProductOverview({
             rows={rows[section]}
             initialValues={toSectionFormValues(product, section)}
             lookups={lookups}
-            hiddenFields={product.is_kit ? KIT_DERIVED_FIELDS : undefined}
+            hiddenFields={hiddenSectionFields(product.is_kit)}
           />
         ))}
       </div>

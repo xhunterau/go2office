@@ -93,8 +93,8 @@ export const PRODUCT_FIELD_META: Record<
 // placeholders nothing reads. Hidden from the edit dialog so nobody fills in a
 // number that will never be used; the overview shows the derived value instead.
 //
-// `retail_price` is deliberately absent — a kit's shelf price is a decision, not
-// a derivation.
+// `retail_price` is absent because it is not derived — see PRICING_OWNED_FIELDS
+// for why it is nonetheless kept out of this dialog.
 export const KIT_DERIVED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
   "origin_id",
   "currency",
@@ -105,6 +105,21 @@ export const KIT_DERIVED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
   "width",
   "height",
 ])
+
+// Columns the Pricing tab owns the edit affordance for, on every product —
+// stored, not derived, but only decidable next to the landed cost and the
+// suggested price. Hidden from the Commercial dialog so there is exactly one
+// place to change them; the overview still shows the value.
+export const PRICING_OWNED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
+  "retail_price",
+])
+
+// The fields the Commercial dialog must not offer for this product. Kits also
+// hide everything they derive from their components.
+export function hiddenSectionFields(isKit: boolean): ReadonlySet<ProductFieldKey> {
+  if (!isKit) return PRICING_OWNED_FIELDS
+  return new Set([...KIT_DERIVED_FIELDS, ...PRICING_OWNED_FIELDS])
+}
 
 // Title shown on each overview card / edit dialog.
 export const PRODUCT_SECTION_TITLES: Record<ProductSection, string> = {

@@ -130,17 +130,27 @@ export function ProductSectionDialog({
   const fields = hiddenFields
     ? allFields.filter((key) => !hiddenFields.has(key))
     : allFields
-  const hasHiddenFields = fields.length < allFields.length
+
+  // Two different reasons a field can be missing, and they need different
+  // explanations: a kit's cost inputs are derived and cannot be set anywhere,
+  // while the retail price is simply set elsewhere. The kit case subsumes the
+  // other, so it is worded to cover both.
+  const hidesRetailPrice =
+    allFields.includes("retail_price") &&
+    (hiddenFields?.has("retail_price") ?? false)
+  const hidesDerived = fields.length < allFields.length - (hidesRetailPrice ? 1 : 0)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Edit {PRODUCT_SECTION_TITLES[section]}</DialogTitle>
-          {hasHiddenFields ? (
+          {hidesDerived || hidesRetailPrice ? (
             <DialogDescription>
-              Cost, origin, weight and dimensions are derived from this kit&apos;s
-              components and cannot be edited here. See the Pricing tab.
+              {hidesDerived &&
+                "Cost, origin, weight and dimensions are derived from this kit's components and cannot be edited here. "}
+              {hidesRetailPrice &&
+                "The retail price is set on the Pricing tab, alongside the landed cost and the suggested price."}
             </DialogDescription>
           ) : (
             section === "details" && (

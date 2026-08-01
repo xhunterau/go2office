@@ -13,6 +13,7 @@ import {
 import {
   productCreateSchema,
   productSectionSchemas,
+  retailPriceSchema,
   DEFAULT_DIMENSION,
   type ProductCreateInput,
   type ProductSection,
@@ -234,6 +235,47 @@ export async function updateProductSection(
       (payload.image_url as string | null) ?? null
     )
   }
+
+  revalidatePath(PATH)
+  revalidatePath(`${PATH}/${id}`)
+  return { success: true }
+}
+
+// Set the retail price on its own, from the Pricing tab.
+//
+// Deliberately not routed through updateProductSection("commercial"): that
+// schema demands the whole commercial group, so a submit from the Pricing tab
+// would rewrite the purchase price, weight and dimensions from whatever the
+// page was rendered with — a stale overwrite waiting to happen. One column in,
+// one column out.
+export async function updateProductRetailPrice(
+  id: number,
+  input: unknown
+): Promise<ActionResult> {
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid product id" }
+  }
+
+  const parsed = retailPriceSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    }
+  }
+
+  const supabase = await createClient()
+  // updated_at is maintained by the moddatetime trigger (migration
+  // 20260719150000), so it is never set here.
+  const { data: updated, error } = await supabase
+    .from("products")
+    .update({ retail_price: parsed.data.retail_price })
+    .eq("id", id)
+    .select("id")
+    .maybeSingle()
+
+  if (error) return { success: false, error: error.message }
+  if (!updated) return { success: false, error: "Product not found" }
 
   revalidatePath(PATH)
   revalidatePath(`${PATH}/${id}`)

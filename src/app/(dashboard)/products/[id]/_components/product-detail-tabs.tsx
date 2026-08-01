@@ -5,23 +5,33 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-export const PRODUCT_TABS = ["overview", "pricing", "stock", "kit"] as const
+export const PRODUCT_TABS = [
+  "overview",
+  "pricing",
+  "stock",
+  "kit",
+  "used-in",
+] as const
 export type ProductTab = (typeof PRODUCT_TABS)[number]
 
 // Panels arrive as slots so the Overview stays a Server Component — this
 // wrapper only owns tab selection.
 export function ProductDetailTabs({
   showKitTab,
+  showUsedInTab,
   overview,
   pricing,
   stock,
   kit,
+  usedIn,
 }: {
   showKitTab: boolean
+  showUsedInTab: boolean
   overview: React.ReactNode
   pricing: React.ReactNode
   stock: React.ReactNode
   kit: React.ReactNode
+  usedIn: React.ReactNode
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -31,7 +41,8 @@ export function ProductDetailTabs({
   const active: ProductTab =
     requested === "stock" ||
     requested === "pricing" ||
-    (requested === "kit" && showKitTab)
+    (requested === "kit" && showKitTab) ||
+    (requested === "used-in" && showUsedInTab)
       ? requested
       : "overview"
 
@@ -54,12 +65,14 @@ export function ProductDetailTabs({
         <TabsTrigger value="pricing">Pricing</TabsTrigger>
         <TabsTrigger value="stock">Stock</TabsTrigger>
         {showKitTab && <TabsTrigger value="kit">Kit Components</TabsTrigger>}
+        {showUsedInTab && <TabsTrigger value="used-in">Used In</TabsTrigger>}
       </TabsList>
 
       <TabsContent value="overview">{overview}</TabsContent>
       <TabsContent value="pricing">{pricing}</TabsContent>
       <TabsContent value="stock">{stock}</TabsContent>
       {showKitTab && <TabsContent value="kit">{kit}</TabsContent>}
+      {showUsedInTab && <TabsContent value="used-in">{usedIn}</TabsContent>}
     </Tabs>
   )
 }

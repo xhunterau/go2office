@@ -14,7 +14,13 @@ import type { ProductDetail } from "./product-detail-types"
 
 // Sticky identity strip: it sits outside the tabs so the product it belongs to
 // stays visible while switching between Overview, Stock and Kit Components.
-export function ProductDetailHeader({ product }: { product: ProductDetail }) {
+export function ProductDetailHeader({
+  product,
+  usedInKitCount,
+}: {
+  product: ProductDetail
+  usedInKitCount: number
+}) {
   const router = useRouter()
   const confirm = useConfirm()
   const [isPending, startTransition] = React.useTransition()
@@ -80,6 +86,11 @@ export function ProductDetailHeader({ product }: { product: ProductDetail }) {
                 {product.is_active ? "Active" : "Inactive"}
               </Badge>
               {product.is_kit && <Badge variant="outline">Kit</Badge>}
+              {usedInKitCount > 0 && (
+                <Badge variant="outline">
+                  In {usedInKitCount} Kit{usedInKitCount === 1 ? "" : "s"}
+                </Badge>
+              )}
             </div>
           </div>
         </div>

@@ -21,10 +21,13 @@ import {
 const PATH = "/products"
 
 // Both the list badge and the detail page show kit information, so every
-// mutation refreshes the kit's own detail route plus the list.
-function revalidateKit(kitProductId: number): void {
+// mutation refreshes the kit's own detail route plus the list. The component
+// carries the relationship too — its "Used In" tab is the reverse of the kit's
+// Kit Components tab — so its route is refreshed alongside.
+function revalidateKit(kitProductId: number, componentProductId: number): void {
   revalidatePath(PATH)
   revalidatePath(`${PATH}/${kitProductId}`)
+  revalidatePath(`${PATH}/${componentProductId}`)
 }
 
 // Translate the constraints declared in migration 20260725110000 into messages
@@ -46,6 +49,36 @@ function invalidId(value: number): boolean {
   return !Number.isInteger(value) || value <= 0
 }
 
+// The server half of the picker's filters (searchKitCandidates applies the same
+// two rules): a component must be an ordinary, active product.
+//
+// Rejecting kits is what keeps pricing correct — product_cost_kit does not
+// expand nested kits, so one kit inside another leaves the parent with no
+// rolled-up cost at all — and it is also what makes a reference cycle
+// impossible: a non-kit owns no components, so no path can lead back.
+//
+// Returns null when the component is usable, or the message to show otherwise.
+async function assertUsableComponent(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  componentProductId: number
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("products")
+    .select("is_kit, is_active")
+    .eq("id", componentProductId)
+    .maybeSingle()
+
+  if (error) return error.message
+  if (!data) return "The selected component no longer exists."
+  if (data.is_kit) {
+    return "A kit cannot be used as a component of another kit."
+  }
+  if (!data.is_active) {
+    return "Inactive products cannot be added to a kit."
+  }
+  return null
+}
+
 export async function addKitItem(input: unknown): Promise<ActionResult> {
   const parsed = kitItemCreateSchema.safeParse(input)
   if (!parsed.success) {
@@ -57,6 +90,13 @@ export async function addKitItem(input: unknown): Promise<ActionResult> {
   const data = parsed.data
 
   const supabase = await createClient()
+
+  const rejection = await assertUsableComponent(
+    supabase,
+    data.component_product_id
+  )
+  if (rejection) return { success: false, error: rejection }
+
   // created_at/updated_at come from the DB defaults + moddatetime trigger
   // (migration 20260725110000), so they are never set here.
   const { error } = await supabase.from("product_kit_items").insert({
@@ -67,7 +107,7 @@ export async function addKitItem(input: unknown): Promise<ActionResult> {
 
   if (error) return { success: false, error: messageFor(error) }
 
-  revalidateKit(data.kit_product_id)
+  revalidateKit(data.kit_product_id, data.component_product_id)
   return { success: true }
 }
 
@@ -96,13 +136,13 @@ export async function updateKitItemQty(
     .update({ qty: parsed.data.qty })
     .eq("id", id)
     .eq("kit_product_id", kitProductId)
-    .select("id")
+    .select("id, component_product_id")
     .maybeSingle()
 
   if (error) return { success: false, error: messageFor(error) }
   if (!updated) return { success: false, error: "Kit component not found" }
 
-  revalidateKit(kitProductId)
+  revalidateKit(kitProductId, updated.component_product_id)
   return { success: true }
 }
 
@@ -120,13 +160,13 @@ export async function removeKitItem(
     .delete()
     .eq("id", id)
     .eq("kit_product_id", kitProductId)
-    .select("id")
+    .select("id, component_product_id")
     .maybeSingle()
 
   if (error) return { success: false, error: messageFor(error) }
   if (!deleted) return { success: false, error: "Kit component not found" }
 
-  revalidateKit(kitProductId)
+  revalidateKit(kitProductId, deleted.component_product_id)
   return { success: true }
 }
 

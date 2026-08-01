@@ -244,6 +244,19 @@ export const productSectionFormSchemas = {
   ),
 } satisfies Record<ProductSection, z.ZodTypeAny>
 
+// ---------------------------------------------------------------------------
+// Retail price — edited on its own, from the Pricing tab
+//
+// It is the one commercial number that is a decision rather than an input to
+// one, so it is set where the cost and the suggested price are visible. Picked
+// from the same dictionaries as everything else: the rule lives in one place.
+// ---------------------------------------------------------------------------
+
+export const retailPriceSchema = pickSchema(serverFields, ["retail_price"])
+
+export const retailPriceFormSchema = pickSchema(formFields, ["retail_price"])
+export type RetailPriceFormValues = z.infer<typeof retailPriceFormSchema>
+
 // The string-based value shape of one section's edit form.
 export type ProductSectionFormValues<S extends ProductSection> = z.infer<
   (typeof productSectionFormSchemas)[S]
