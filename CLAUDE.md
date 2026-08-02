@@ -71,11 +71,18 @@
 
 # 15. 遗留数据迁移脚本同步规则
 - **适用范围**：`scripts/migration/*.sql` 是 Laravel 遗留表向正式表迁移的一次性数据搬运脚本，脚本内每张目标表的 `INSERT` 语句必须显式列出目标列，严禁使用 `SELECT *`。当前脚本清单：
-  - `001_products_domain_data.sql`：`go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` → `products`/`brands`/`suppliers`/`origins`（详见 `docs/products-domain-migration.md`）
+  - `001_products_domain_data.sql`：`go2_products`/`go2brands`/`go2_suppliers`/`go2_origins` → `products`/`brands`/`suppliers`/`origins`（详见 `docs/products-domain-migration.md`）。**`created_at` / `updated_at` 必须保持 `COALESCE(源值, 目标现有值, now())` 三级回退**：`go2_products` 被重新导入后有 1767 行 `created_at`、1167 行 `updated_at` 为 NULL，直接插入会撞 NOT NULL 让整个事务回滚（2026-08-02 实测）；**第二级不可省**——省掉会把这 1767 个商品的创建日期静默重置为迁移当天
   - `002_product_kits_data.sql`：`go2_kits` → `product_kit_items`（详见 `docs/product-kits-migration.md`）
   - `003_inventory_data.sql`：`go2_locations`/`go2_locations_products` → `locations`/`inventory_levels`（详见 `docs/inventory-migration.md`）。`go2_warehouses` 按决策不迁移；库存行的 `EXISTS` 守卫带 `NOT p.is_kit`（套装不持有自身库存），**该条件不可删除**——删掉会让最终同步把已清除的套装库存搬回来并撞上 `inventory_levels_reject_kit_stock` 触发器
-- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`/`product_kit_items`/`locations`/`inventory_levels`）中**被脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改对应脚本的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
+  - `004_orders_data.sql`：`go2_buyers`/`go2_orders`/`go2_transactions`/`go2_transactions_products` → `customers`/`orders`/`order_transactions`/`order_items`（详见 `docs/orders-domain-migration.md`）。依赖 001 与 003 已重跑（`product_id` 与 `location_id` 分别对着 `public.products` 与 `public.locations` 解析）
+- **强制同步触发条件**：若正式表（`products`/`brands`/`suppliers`/`origins`/`product_kit_items`/`locations`/`inventory_levels`/`customers`/`orders`/`order_transactions`/`order_items`）中**被脚本引用的列**发生改名、删除，或类型变更导致与脚本映射逻辑不兼容，必须在同一次改动中**同步修改对应脚本的映射/类型转换语句**；与遗留数据无关的新增业务字段（脚本未引用）无需同步。
 - **003 脚本的额外风险**：`003` 的 `qty` 映射为 `GREATEST(源值, 0)`，每次执行都会用 Laravel 旧值**覆盖** `inventory_levels.qty`。新系统开始真实出入库后再执行它，会静默抹掉这些操作且不报错。执行前必须暂停库存写入，上线后该脚本立即退休。
+- **004 脚本的额外风险（trigger 必须禁用）**：`004` 第 3 段用 `ALTER TABLE ... DISABLE TRIGGER` 关掉 `order_transactions_rebuild_items_insert` / `..._update` 两个触发器，插完 `order_transactions` 与 `order_items` 后再打开。**这两句不可删、不可拆到不同事务**——触发器开着灌 `order_transactions` 会立刻用今天的 BOM 重算全部 25 万行 `order_items`，覆盖历史实际记录、丢掉 3,026 行无法重算的明细和 28,893 行拣货库位，**全程不报错**。脚本尾部诊断 6（`order_items` 中 `is_auto_generated = true` 的行数应为 0）是唯一的事后检验。
+- **004 的 `shipping_method` 映射**：`orders.shipping_method` 枚举只覆盖 16 个遗留值，其余 7 个已停用承运商落到 `legacy_shipping_method` 文本列。改动 `public.shipping_method` 枚举时必须同步检查 `004` 的 `CASE` 映射表，否则新值不会被用上、旧值会静默改道进 legacy 列。
+- **004 的 `order_status` / `sales_platform` 映射（拼写必须逐字对齐）**：这两列不走 `CASE` 映射，而是 `lower(源值)::enum` 直接转换，所以**每个枚举标签必须是 Laravel 值的精确小写形式**。`public.order_status` 现有 10 个值（迁移 `20260804100000` 补齐了 Laravel 下拉的全部选项），其中 `labelled` 是英式双 L——写成 `labeled` 会让转换无值可解，**在最终同步时炸掉整个 004 事务**，而这个错误在此之前不会以任何形式暴露。新增或改动这两个枚举的值时，必须同步核对 Laravel 侧的原始拼写。
+- **执行方式**：一律用 `node scripts/migration/run-all.mjs`（按 001→002→003→004 顺序执行 + 自动验证），**严禁**用 `supabase db query` 跑这些脚本——它不接受多语句文件，而按分号拆开执行会破坏事务边界（`004` 的 `DISABLE TRIGGER` 与 INSERT 必须同事务）。`003` 默认被拦住，需显式加 `--i-have-suspended-inventory-writes`。只验证不导数用 `--checks-only`。
+- **远端 `statement_timeout` 是 2 分钟**：首次导入约 50 秒，但最终切换是全量 upsert 重跑，实测 132 秒被杀。`004` 的四个事务块已各自 `SET LOCAL statement_timeout = 0`；新增大数据量脚本时必须照做。
+- **`go2_*` 临时表没有任何索引**：针对它们写校验查询时严禁用相关子查询（每行一次全表扫），必须先 `GROUP BY` 聚合再 `JOIN`。
 - **脚本退休**：这些脚本仅服务于"Laravel 系统停用 + 最终生产备份导入临时表"这一次性事件，成功执行最后一次导入并清理 `go2_*` 临时表后，脚本即完成使命，可归档、无需继续长期维护。
 
 # 16. 环境变量读取规则（.env.local）

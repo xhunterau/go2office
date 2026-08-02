@@ -427,6 +427,264 @@ export type Database = {
       }
       // Orders domain (migrations 20260803100000-20260803160000).
       // See docs/orders-domain-migration.md.
+      customers: {
+        Row: {
+          id: number
+          platform_user_id: string | null
+          full_name: string | null
+          email: string | null
+          phone: string | null
+          is_anonymised_email: boolean
+          // The customer's CURRENT address, taken from their most recent order.
+          // Orders do not keep their own copy, so an order placed before the
+          // customer moved renders against this address (8150 orders are in
+          // that position). Migrated verbatim: NSW and New South Wales both
+          // occur, and address_line3 holds an `ebay:xxxx` reference code on
+          // ~129k rows rather than an address line.
+          company_name: string | null
+          address_line1: string | null
+          address_line2: string | null
+          address_line3: string | null
+          address_line4: string | null
+          city: string | null
+          state: string | null
+          postcode: string | null
+          country: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          platform_user_id?: string | null
+          full_name?: string | null
+          email?: string | null
+          phone?: string | null
+          is_anonymised_email?: boolean
+          company_name?: string | null
+          address_line1?: string | null
+          address_line2?: string | null
+          address_line3?: string | null
+          address_line4?: string | null
+          city?: string | null
+          state?: string | null
+          postcode?: string | null
+          country?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          platform_user_id?: string | null
+          full_name?: string | null
+          email?: string | null
+          phone?: string | null
+          is_anonymised_email?: boolean
+          company_name?: string | null
+          address_line1?: string | null
+          address_line2?: string | null
+          address_line3?: string | null
+          address_line4?: string | null
+          city?: string | null
+          state?: string | null
+          postcode?: string | null
+          country?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      orders: {
+        Row: {
+          id: number
+          customer_id: number
+          invoice_number: string
+          status: Database["public"]["Enums"]["order_status"]
+          platform: Database["public"]["Enums"]["sales_platform"]
+          shipping_method: Database["public"]["Enums"]["shipping_method"] | null
+          // Historical value for the seven retired carriers that have no home in
+          // the shipping_method enum. Read as
+          // shipping_method ?? legacy_shipping_method.
+          legacy_shipping_method: string | null
+          // Postage for the whole order. Upstream it was per transaction line;
+          // migration 20260803170000 summed it up to here.
+          postage_and_handling: number
+          tracking_number: string | null
+          web_order_id: string | null
+          comments: string | null
+          posted_on_date: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          customer_id: number
+          invoice_number: string
+          status: Database["public"]["Enums"]["order_status"]
+          platform: Database["public"]["Enums"]["sales_platform"]
+          shipping_method?: Database["public"]["Enums"]["shipping_method"] | null
+          legacy_shipping_method?: string | null
+          postage_and_handling?: number
+          tracking_number?: string | null
+          web_order_id?: string | null
+          comments?: string | null
+          posted_on_date?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          customer_id?: number
+          invoice_number?: string
+          status?: Database["public"]["Enums"]["order_status"]
+          platform?: Database["public"]["Enums"]["sales_platform"]
+          shipping_method?: Database["public"]["Enums"]["shipping_method"] | null
+          legacy_shipping_method?: string | null
+          postage_and_handling?: number
+          tracking_number?: string | null
+          web_order_id?: string | null
+          comments?: string | null
+          posted_on_date?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "orders_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_transactions: {
+        Row: {
+          id: number
+          order_id: number
+          item_title: string | null
+          item_number: string | null
+          custom_label: string | null
+          quantity: number
+          sale_price: number
+          sale_date: string
+          paid_on_date: string
+          postage_service: string | null
+          sales_record_number: string | null
+          order_id_ebay: string | null
+          transaction_id_ebay: string | null
+          click_and_collect_reference: string | null
+          private_field: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          order_id: number
+          item_title?: string | null
+          item_number?: string | null
+          custom_label?: string | null
+          quantity: number
+          sale_price?: number
+          sale_date: string
+          paid_on_date: string
+          postage_service?: string | null
+          sales_record_number?: string | null
+          order_id_ebay?: string | null
+          transaction_id_ebay?: string | null
+          click_and_collect_reference?: string | null
+          private_field?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          order_id?: number
+          item_title?: string | null
+          item_number?: string | null
+          custom_label?: string | null
+          quantity?: number
+          sale_price?: number
+          sale_date?: string
+          paid_on_date?: string
+          postage_service?: string | null
+          sales_record_number?: string | null
+          order_id_ebay?: string | null
+          transaction_id_ebay?: string | null
+          click_and_collect_reference?: string | null
+          private_field?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_transactions_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_items: {
+        Row: {
+          id: number
+          transaction_id: number
+          // Null when custom_label resolved to no product, or when the product
+          // was deleted. sku_snapshot is then the only identifying information.
+          product_id: number | null
+          sku_snapshot: string | null
+          quantity: number
+          location_id: number | null
+          is_auto_generated: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          transaction_id: number
+          product_id?: number | null
+          sku_snapshot?: string | null
+          quantity: number
+          location_id?: number | null
+          is_auto_generated?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          transaction_id?: number
+          product_id?: number | null
+          sku_snapshot?: string | null
+          quantity?: number
+          location_id?: number | null
+          is_auto_generated?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_items_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "order_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_items_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       product_pricing: {
@@ -580,6 +838,22 @@ export type Database = {
         }
         Relationships: []
       }
+      // Replaces the dropped go2_orders.total_sale column (migration
+      // 20260803160000). Do not join this in a paginated list query -- it
+      // aggregates all order_transactions rows every time it is referenced.
+      // Page first, then select the totals for that page's ids.
+      order_totals: {
+        Row: {
+          order_id: number
+          goods_total: number
+          // goods_total + orders.postage_and_handling. There is no postage_total
+          // any more: postage is a plain column on orders, so aggregating it
+          // here would just read one row back.
+          order_total: number
+          transaction_count: number
+        }
+        Relationships: []
+      }
     }
     Functions: {
       charm_price: {
@@ -660,6 +934,61 @@ export type Database = {
         | "adjust"
         | "move_in"
         | "move_out"
+      // Declared in business-lifecycle order (migration 20260804100000), which
+      // is also the enum's sort order -- keep this list in that order so a
+      // dropdown built by iterating it comes out right.
+      // 'labelled' is the British double-L spelling, matching Laravel's value;
+      // 004 casts with lower() and no mapping, so it has to match exactly.
+      order_status:
+        | "new"
+        | "pending"
+        | "unpaid"
+        | "backorder"
+        | "processing"
+        | "picked"
+        | "labelled"
+        | "issued"
+        | "completed"
+        | "cancelled"
+      sales_platform: "ebay" | "shopify" | "backorder" | "store"
+      // PascalCase_Snake by design: these are the labels the business supplied.
+      // The inconsistency with the lowercase enums above is known and accepted
+      // (docs/orders-domain-migration.md section 4.1).
+      shipping_method:
+        | "Letter"
+        | "Register_Letter"
+        | "Parcel_Post"
+        | "Express_Post"
+        | "Eparcel_Regular"
+        | "Eparcel_Express"
+        | "Eparcel_Intl_Express"
+        | "Mypost_Regular"
+        | "Mypost_Express"
+        | "Mypost_Reg_Xs_Box"
+        | "Mypost_Reg_S_Box"
+        | "Mypost_Reg_M_Box"
+        | "Mypost_Reg_L_Box"
+        | "Mypost_Reg_XL_Box"
+        | "Mypost_Exp_Xs_Box"
+        | "Mypost_Exp_S_Box"
+        | "Mypost_Exp_M_Box"
+        | "Mypost_Exp_L_Box"
+        | "Mypost_Exp_XL_Box"
+        | "Mypost_Reg_Xs_Satchel"
+        | "Mypost_Reg_S_Satchel"
+        | "Mypost_Reg_M_Satchel"
+        | "Mypost_Reg_L_Satchel"
+        | "Mypost_Reg_XL_Satchel"
+        | "Mypost_Exp_Xs_Satchel"
+        | "Mypost_Exp_S_Satchel"
+        | "Mypost_Exp_M_Satchel"
+        | "Mypost_Exp_L_Satchel"
+        | "Mypost_Exp_XL_Satchel"
+        | "Store_Delivery"
+        | "Direct_Freight"
+        | "Click_and_Collect"
+        | "Aramex_Parcel"
+        | "Aramex_Satchel"
     }
     CompositeTypes: {
       [_ in never]: never

@@ -44,6 +44,20 @@ ON CONFLICT (id) DO UPDATE SET
 -- soft-deleted rows are intentionally out of scope for this migration.
 -- created_at/updated_at are naive timestamps recorded in Australia/Sydney local time;
 -- `AT TIME ZONE 'Australia/Sydney'` reinterprets them as that zone and converts to timestamptz.
+--
+-- Both timestamps fall back through COALESCE because the go2_* temp tables were
+-- re-imported at some point after this script first ran, and that import lost
+-- the timestamps on 1767 of the 3122 live rows (updated_at on 1167). Inserting
+-- those NULLs straight into products, whose columns are NOT NULL, aborts the
+-- whole transaction -- which is exactly what happened on 2026-08-02.
+--
+-- The fallback order matters:
+--   1. the source value, when Laravel still has one;
+--   2. the value already on the target row, so re-running this script does NOT
+--      overwrite a correct 2020 timestamp with today's date;
+--   3. now(), only for a row nobody has ever migrated and Laravel cannot date.
+-- Dropping step 2 would silently reset the creation date of 1767 products to the
+-- day of the migration.
 INSERT INTO public.products (
   id, sku, model, upc, brand_id, name, image_url, origin_id, supplier_id,
   currency, purchase_price, is_gst, weight, length, width, height,
@@ -73,10 +87,18 @@ SELECT
   (is_kit = 1),
   ebay_title,
   description,
-  (created_at AT TIME ZONE 'Australia/Sydney'),
-  (updated_at AT TIME ZONE 'Australia/Sydney')
-FROM public.go2_products
-WHERE deleted_at IS NULL
+  COALESCE(
+    (g.created_at AT TIME ZONE 'Australia/Sydney'),
+    (SELECT p.created_at FROM public.products p WHERE p.id = g.id),
+    now()
+  ),
+  COALESCE(
+    (g.updated_at AT TIME ZONE 'Australia/Sydney'),
+    (SELECT p.updated_at FROM public.products p WHERE p.id = g.id),
+    now()
+  )
+FROM public.go2_products AS g
+WHERE g.deleted_at IS NULL
 ON CONFLICT (id) DO UPDATE SET
   sku = EXCLUDED.sku,
   model = EXCLUDED.model,
