@@ -16,6 +16,9 @@ export type InventoryListRow = Pick<
 > & {
   // Which locations hold the units, joined for display. Null when none do.
   location_names: string | null
+  // The same holdings unrolled, so a row can be received, dispatched, moved or
+  // counted in place without a round trip per row when the menu opens.
+  lines: ProductStockLine[]
 }
 
 const LIST_COLUMNS = "id, sku, name, image_url, is_active, is_kit, on_hand"
@@ -125,13 +128,14 @@ export async function fetchInventoryList(
   const page = data ?? []
   if (page.length === 0) return { rows: [], count: count ?? 0, error: null }
 
-  // Location names live in product_stock rather than product_list_pricing: the
-  // products list has no use for them, and widening a shared view to serve one
-  // column on one page is not worth it. One extra round trip for the 20 rows on
-  // screen is cheaper than that coupling.
+  // Per-location holdings for the 20 rows on screen. Read from inventory_levels
+  // rather than product_stock because the row menu acts on a single location:
+  // the rolled-up view only carries the joined names, which cannot be dispatched
+  // or counted against. The names are derived from these lines instead, so this
+  // stays one extra round trip rather than two.
   const { data: stock, error: stockError } = await supabase
-    .from("product_stock")
-    .select("product_id, location_names")
+    .from("inventory_levels")
+    .select("id, product_id, location_id, qty, locations(name)")
     .in(
       "product_id",
       page.map((row) => row.id)
@@ -139,15 +143,28 @@ export async function fetchInventoryList(
 
   if (stockError) return { rows: [], count: 0, error: stockError.message }
 
-  const namesByProduct = new Map(
-    (stock ?? []).map((row) => [row.product_id, row.location_names])
-  )
+  const linesByProduct = new Map<number, ProductStockLine[]>()
+  for (const row of stock ?? []) {
+    const embedded = row as typeof row & { locations: { name: string } | null }
+    const lines = linesByProduct.get(row.product_id) ?? []
+    lines.push(toStockLine(embedded))
+    linesByProduct.set(row.product_id, lines)
+  }
+  for (const lines of linesByProduct.values()) lines.sort(byLocationName)
 
   return {
-    rows: page.map((row) => ({
-      ...row,
-      location_names: namesByProduct.get(row.id) ?? null,
-    })) as InventoryListRow[],
+    rows: page.map((row) => {
+      const lines = linesByProduct.get(row.id) ?? []
+      // Mirrors product_stock.location_names, filter included: a location
+      // holding zero records where the product belongs, not what is there to
+      // pick, so it is not named.
+      const names = lines
+        .filter((line) => line.qty > 0)
+        .map((line) => line.location_name)
+        .join(", ")
+
+      return { ...row, location_names: names || null, lines }
+    }) as InventoryListRow[],
     count: count ?? 0,
     error: null,
   }
@@ -177,6 +194,28 @@ export type ProductStockLine = {
   qty: number
 }
 
+// Flatten one inventory_levels row with its location embedded. Shared so the
+// list and the detail page describe a holding the same way.
+function toStockLine(row: {
+  id: number
+  location_id: number
+  qty: number
+  locations: { name: string } | null
+}): ProductStockLine {
+  return {
+    id: row.id,
+    location_id: row.location_id,
+    location_name: row.locations?.name ?? `#${row.location_id}`,
+    qty: row.qty,
+  }
+}
+
+// Sorted in JS: ordering on an embedded resource is not something PostgREST can
+// do from the parent table.
+function byLocationName(a: ProductStockLine, b: ProductStockLine): number {
+  return a.location_name.localeCompare(b.location_name)
+}
+
 export async function fetchProductStockLines(
   supabase: SupabaseClient<Database>,
   productId: number
@@ -188,19 +227,10 @@ export async function fetchProductStockLines(
 
   if (error) return { lines: [], error: error.message }
 
-  const lines = (data ?? []).map((row) => {
-    const embedded = row as typeof row & { locations: { name: string } | null }
-    return {
-      id: row.id,
-      location_id: row.location_id,
-      location_name: embedded.locations?.name ?? `#${row.location_id}`,
-      qty: row.qty,
-    }
-  })
-
-  // Sorted by location name in JS: ordering on an embedded resource is not
-  // something PostgREST can do from the parent table.
-  lines.sort((a, b) => a.location_name.localeCompare(b.location_name))
+  const lines = (data ?? []).map((row) =>
+    toStockLine(row as typeof row & { locations: { name: string } | null })
+  )
+  lines.sort(byLocationName)
 
   return { lines, error: null }
 }
@@ -258,4 +288,65 @@ export async function fetchProductMovements(
   })
 
   return { movements, error: null }
+}
+
+// A gap in the timeline: one past prune, summarised. Read from
+// inventory_movement_prunes, which the prune function writes and nothing else
+// can (migration 20260802100000).
+export type MovementPruneRow = Pick<
+  Database["public"]["Tables"]["inventory_movement_prunes"]["Row"],
+  | "id"
+  | "kept"
+  | "deleted_count"
+  | "qty_in"
+  | "qty_out"
+  | "first_at"
+  | "last_at"
+  | "pruned_at"
+>
+
+// Enough to explain why a timeline is short without turning the panel into a
+// list of housekeeping. The full record is in the table for anyone who needs it.
+export const PRUNE_NOTE_LIMIT = 5
+
+export async function fetchProductPrunes(
+  supabase: SupabaseClient<Database>,
+  productId: number,
+  limit: number = PRUNE_NOTE_LIMIT
+): Promise<{ prunes: MovementPruneRow[]; error: string | null }> {
+  const { data, error } = await supabase
+    .from("inventory_movement_prunes")
+    .select(
+      "id, kept, deleted_count, qty_in, qty_out, first_at, last_at, pruned_at"
+    )
+    .eq("product_id", productId)
+    .order("pruned_at", { ascending: false })
+    .limit(limit)
+
+  if (error) return { prunes: [], error: error.message }
+  return { prunes: data ?? [], error: null }
+}
+
+// What the history block needs: the surviving movements, plus a note for each
+// stretch that was deleted. Fetched together because showing one without the
+// other misleads — a short timeline reads as "nothing happened" when the truth
+// is "the record was cleared".
+export async function fetchProductHistory(
+  supabase: SupabaseClient<Database>,
+  productId: number
+): Promise<{
+  movements: MovementRow[]
+  prunes: MovementPruneRow[]
+  error: string | null
+}> {
+  const [movements, prunes] = await Promise.all([
+    fetchProductMovements(supabase, productId),
+    fetchProductPrunes(supabase, productId),
+  ])
+
+  return {
+    movements: movements.movements,
+    prunes: prunes.prunes,
+    error: movements.error ?? prunes.error,
+  }
 }

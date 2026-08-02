@@ -397,6 +397,36 @@ export type Database = {
           },
         ]
       }
+      // Audit trail for ledger prunes (migration 20260802100000). Read-only to
+      // the application: rows are written by prune_product_movements, which runs
+      // as its owner, so there is neither an Insert nor an Update type.
+      inventory_movement_prunes: {
+        Row: {
+          id: number
+          product_id: number
+          kept: number
+          deleted_count: number
+          qty_in: number
+          qty_out: number
+          first_at: string
+          last_at: string
+          pruned_by: string | null
+          pruned_at: string
+        }
+        Insert: never
+        Update: never
+        Relationships: [
+          {
+            foreignKeyName: "inventory_movement_prunes_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      // Orders domain (migrations 20260803100000-20260803160000).
+      // See docs/orders-domain-migration.md.
     }
     Views: {
       product_pricing: {
@@ -589,6 +619,37 @@ export type Database = {
           p_note?: string | null
         }
         Returns: undefined
+      }
+      // Deletes one product's movements except the p_keep most recent, and
+      // returns a single-row summary of what went. RETURNS TABLE, so the result
+      // arrives as an array; the timestamps are null when nothing matched.
+      prune_product_movements: {
+        Args: {
+          p_product_id: number
+          p_keep?: number
+        }
+        Returns: {
+          deleted_count: number
+          qty_in: number
+          qty_out: number
+          first_at: string | null
+          last_at: string | null
+        }[]
+      }
+      // Rebuilds one transaction's order_items from its custom_label and
+      // quantity, expanding kits through product_kit_items. Returns the number of
+      // rows written. The triggers call this; call it directly only to repair a
+      // row by hand.
+      rebuild_order_items: {
+        Args: { p_transaction_id: number }
+        Returns: number
+      }
+      // Same, for every transaction on an order. This is the only supported way
+      // to pull a historical order up to the current BOM -- editing
+      // product_kit_items does not do it.
+      rebuild_order_items_for_order: {
+        Args: { p_order_id: number }
+        Returns: number
       }
     }
     Enums: {

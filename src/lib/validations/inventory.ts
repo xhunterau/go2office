@@ -6,6 +6,9 @@ const MAX_QTY = 100000
 
 const positiveId = z.coerce.number().int().positive()
 
+// Bare product id, for the read-only action that loads a row's ledger on demand.
+export const productIdSchema = positiveId
+
 const note = z
   .string()
   .trim()
@@ -60,6 +63,20 @@ export const moveStockSchema = z
       })
     }
   })
+
+// How many of the newest movements "Keep latest" spares. Fixed rather than
+// asked for: the point of the control is to clear noise in one click, and a
+// number box turns that into a decision nobody wants to make per product.
+export const MOVEMENT_KEEP_RECENT = 3
+
+// Pruning is deliberately not a free-form "delete rows where": the only two
+// shapes the UI offers are the only two the action accepts.
+export const pruneMovementsSchema = z.object({
+  product_id: positiveId,
+  keep: z.union([z.literal(0), z.literal(MOVEMENT_KEEP_RECENT)]),
+})
+
+export type PruneMovementsInput = z.infer<typeof pruneMovementsSchema>
 
 export type StockMovementInput = z.infer<typeof stockMovementSchema>
 export type SetStockInput = z.infer<typeof setStockSchema>

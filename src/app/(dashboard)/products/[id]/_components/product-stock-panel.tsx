@@ -1,10 +1,14 @@
 "use client"
 
 import * as React from "react"
-import { ArrowLeftRight, Boxes, ClipboardCheck, Minus, Plus } from "lucide-react"
+import { ArrowLeftRight, Boxes, Minus, Plus } from "lucide-react"
 
 import type { LocationOption } from "@/lib/queries/locations"
-import type { MovementRow, ProductStockLine } from "@/lib/queries/inventory"
+import type {
+  MovementPruneRow,
+  MovementRow,
+  ProductStockLine,
+} from "@/lib/queries/inventory"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -14,26 +18,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+import { MovementsHistorySection } from "@/components/inventory/movements-history-section"
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+  StockLinesTable,
+  totalOnHand,
+} from "@/components/inventory/stock-lines-table"
 import {
   StockMovementDialog,
   type StockAction,
-} from "./stock-movement-dialog"
-import { StockMovementsTimeline } from "./stock-movements-timeline"
+} from "@/components/inventory/stock-movement-dialog"
 
 export function ProductStockPanel({
   productId,
   isKit,
   lines,
   movements,
+  prunes,
   locations,
   error,
 }: {
@@ -41,6 +41,7 @@ export function ProductStockPanel({
   isKit: boolean
   lines: ProductStockLine[]
   movements: MovementRow[]
+  prunes: MovementPruneRow[]
   locations: LocationOption[]
   error: string | null
 }) {
@@ -86,7 +87,7 @@ export function ProductStockPanel({
     )
   }
 
-  const total = lines.reduce((sum, line) => sum + line.qty, 0)
+  const total = totalOnHand(lines)
   const hasStock = lines.length > 0
 
   return (
@@ -134,50 +135,10 @@ export function ProductStockPanel({
         ) : (
           <>
             {hasStock ? (
-              <div className="overflow-x-auto rounded-xl border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Location</TableHead>
-                      <TableHead className="text-right">Qty</TableHead>
-                      <TableHead className="w-28 text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lines.map((line) => (
-                      <TableRow key={line.id}>
-                        <TableCell className="font-medium">
-                          {line.location_name}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {line.qty === 0 ? (
-                            <span className="text-muted-foreground">0</span>
-                          ) : (
-                            line.qty
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => open("adjust", line.location_id)}
-                          >
-                            <ClipboardCheck />
-                            Count
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow className="border-t-2">
-                      <TableCell className="font-medium">Total</TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {total}
-                      </TableCell>
-                      <TableCell />
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </div>
+              <StockLinesTable
+                lines={lines}
+                onCount={(locationId) => open("adjust", locationId)}
+              />
             ) : (
               <div className="flex flex-col items-center gap-3 py-10 text-center">
                 <div className="flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -195,18 +156,11 @@ export function ProductStockPanel({
               </div>
             )}
 
-            <div className="space-y-3">
-              <Separator />
-              <div>
-                <h3 className="text-sm font-medium text-foreground">
-                  Recent movements
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Every change to this product&apos;s stock, most recent first.
-                </p>
-              </div>
-              <StockMovementsTimeline movements={movements} />
-            </div>
+            <MovementsHistorySection
+              productId={productId}
+              movements={movements}
+              prunes={prunes}
+            />
           </>
         )}
       </CardContent>

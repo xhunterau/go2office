@@ -9,7 +9,14 @@ import {
   type ActionResult,
 } from "@/lib/actions/action-result"
 import {
+  fetchProductHistory,
+  type MovementPruneRow,
+  type MovementRow,
+} from "@/lib/queries/inventory"
+import {
   moveStockSchema,
+  productIdSchema,
+  pruneMovementsSchema,
   setStockSchema,
   stockMovementSchema,
 } from "@/lib/validations/inventory"
@@ -160,6 +167,76 @@ export async function purgeZeroStockLevels(): Promise<ActionResult<number>> {
   revalidatePath("/locations")
   revalidatePath("/products", "layout")
   return { success: true, data: count ?? 0 }
+}
+
+// The movement history block's data: what survives, and a note per stretch that
+// was deleted.
+export type ProductHistory = {
+  movements: MovementRow[]
+  prunes: MovementPruneRow[]
+}
+
+// What a prune deleted, for the confirmation toast. Timestamps are null when
+// nothing matched.
+export type PruneSummary = {
+  deleted_count: number
+  qty_in: number
+  qty_out: number
+  first_at: string | null
+  last_at: string | null
+}
+
+// Trim a product's movement history. Stock levels are untouched: the balance
+// lives in inventory_levels, and qty_after on the surviving rows is a snapshot
+// rather than a running total, so nothing here can make a quantity wrong.
+export async function pruneProductMovements(
+  input: unknown
+): Promise<ActionResult<PruneSummary>> {
+  const parsed = pruneMovementsSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    }
+  }
+  const data = parsed.data
+
+  const supabase = await createClient()
+  const { data: summary, error } = await supabase.rpc(
+    "prune_product_movements",
+    { p_product_id: data.product_id, p_keep: data.keep }
+  )
+
+  if (error) return { success: false, error: messageFor(error) }
+
+  // RETURNS TABLE, so one row arrives as a one-element array.
+  const row = summary?.[0]
+  if (!row) return { success: false, error: "Prune returned no summary" }
+
+  // Only the history changed, but it is rendered on both the product page and
+  // the inventory list, so the same paths are refreshed as for a movement.
+  revalidateStock(data.product_id)
+  return { success: true, data: row }
+}
+
+// Read-only: the history for one product, fetched when its row on the inventory
+// list is expanded. Twenty rows each carrying twenty movements is far more than
+// the list needs up front, so the history is left off the page query and pulled
+// only for the row actually opened.
+export async function loadProductHistory(
+  input: unknown
+): Promise<ActionResult<ProductHistory>> {
+  const parsed = productIdSchema.safeParse(input)
+  if (!parsed.success) return { success: false, error: "Invalid product" }
+
+  const supabase = await createClient()
+  const { movements, prunes, error } = await fetchProductHistory(
+    supabase,
+    parsed.data
+  )
+
+  if (error) return { success: false, error }
+  return { success: true, data: { movements, prunes } }
 }
 
 export async function moveStock(input: unknown): Promise<ActionResult> {

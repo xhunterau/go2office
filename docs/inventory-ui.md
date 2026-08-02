@@ -327,6 +327,61 @@ RLS 能挡住 UPDATE / DELETE（没写对应策略即拒绝），但 **TRUNCATE 
 - **移动端与 Dialog 视口验证**（规则 12）：本轮 Dialog 均已设 `max-h-[85vh]` + `overflow-y-auto`，但尚未在真机上各验一次。
 - **`created_by` 目前恒为登录用户**：仓库工人共用账号时会失去区分度，届时需引入操作员字段而非改这一列。
 
+## 12. 第二轮（2026-08-02）：列表页行内操作 + 流水裁剪
+
+### 12.1 `/inventory` 每行可直接操作
+
+列表页标题改为 `Stock overview`（与侧边栏菜单项一致）。每行新增：
+
+- **首列 chevron 展开**（同一时刻只展开一行）：展开后显示该商品的库位明细表（每行可 Count）与流水时间线。
+- **末列 `⋯` 菜单**：Receive / Dispatch / Move / Count / View history，无库存或库位少于 2 个时对应项禁用。
+
+实现上把详情页 Stock tab 的三个块提取为共享组件（`src/components/inventory/`）：`stock-movement-dialog`、`stock-movements-timeline`、`stock-lines-table`、`movements-history-section`，两处页面共用同一份，避免两套库存表单逐渐漂移。
+
+**数据层**：`InventoryListRow` 新增 `lines: ProductStockLine[]`。§10.3 记录的"为库位名多查一次 `product_stock`"改为查 `inventory_levels + locations(name)`——行内操作要落到具体库位，聚合视图只有拼好的名字串没法用；`location_names` 改由这批明细在 JS 里拼出（保留视图里 `qty > 0` 的过滤语义）。请求次数不变。
+
+**流水按需加载**：列表不预取流水（20 行 × 20 条太重），展开时才调只读 Server Action `loadProductMovements`。客户端按 `product_id` 缓存；任何写操作或裁剪之后由 `invalidateHistory` 丢弃对应条目并重拉——`revalidatePath` 刷得了服务端数据，刷不了这份客户端缓存。为此 `StockMovementDialog` 新增可选 `onSuccess` 回调（详情页不传，行为不变）。
+
+### 12.2 流水裁剪：append-only 的口子怎么开
+
+用户需求：流水积累多了，有些商品的历史没有保留价值，需要"删除全部"或"只保留最近 3 条"。
+
+这与 §4.1 / 迁移 `20260801140000` 的设计直接冲突（那两处专门把 `DELETE`/`TRUNCATE` 从 `authenticated` 上收回）。决策是**收窄而非推翻**，理由有二：
+
+1. **余额不是从流水推出来的**。真身是 `inventory_levels.qty`，`qty_after` 只是快照，删流水不会让任何数字变错——丢的是解释，不是数额。
+2. **表权限一点没放开**。`authenticated` 仍然摸不到 ledger 行，只能调用 `prune_product_movements(p_product_id, p_keep)`——一个 `SECURITY DEFINER` 函数，形状固定（单商品、按 `created_at DESC, id DESC` 保留最近 N 条）、且会留痕。
+
+`p_keep = 0` 即全删，`p_keep = 3` 保留最近 3 条（常量 `MOVEMENT_KEEP_RECENT`，Server Action 用 `z.union([literal(0), literal(3)])` 把入参限死在这两个值上，不接受任意 N）。
+
+**审计表 `inventory_movement_prunes`**：每次裁剪写一行，记录 `kept` / `deleted_count` / `qty_in` / `qty_out` / `first_at` / `last_at` / `pruned_by` / `pruned_at`。删除历史这个动作本身若不可见，正好复刻 Laravel 时代查不出所以然的处境。删除与汇总写在同一条语句里（`WITH doomed … removed AS (DELETE … RETURNING …)` 再对 `removed` 聚合），所以统计描述的恰是删掉的那批行，不存在二次扫描被并发插入挪动的可能。表只对 `authenticated` 授 `SELECT`，没有 INSERT 策略——能随手写这张表的客户端也就能伪造它。
+
+**两个容易漏的权限点**（均已在迁移里处理）：
+
+- 新函数默认对 `PUBLIC` 授 `EXECUTE`，`anon` 在 `PUBLIC` 里。`SECURITY INVOKER` 的函数背后还有 RLS 兜底，`SECURITY DEFINER` 没有——必须先 `REVOKE ALL … FROM PUBLIC` 再 `GRANT` 给 `authenticated`。
+- 新表同样吃 §10.2 那条 Supabase 默认权限的亏（`anon`/`authenticated` 拿到 ALL），必须先 `REVOKE ALL` 再授 `SELECT`。
+- 函数内显式检查 `auth.uid() IS NULL`：`SECURITY DEFINER` 以属主身份运行，调用者身份没有 RLS 替它把关。
+
+**UI**：`movements-history-section` 在「Recent movements」标题右侧放一个 `⋯` 菜单，两项 Keep latest 3 / Delete all history，走全局 `useConfirm`（规则 9），文案点明"库存数量不受影响，仅删除记录，且不可恢复"。成功后 toast 汇总：`Deleted 12 movements — 340 in, 180 out (12 Mar 2026 – 28 Jul 2026)`。
+
+**刻意不报数字的地方**：确认文案不写"删除 N 条"。时间线只取 `MOVEMENT_HISTORY_LIMIT = 20` 条，客户端手里的 `movements.length` 是下界不是总数，写成总数就是撒谎。`Keep latest 3` 在条数 ≤ 3 时禁用，用的是同一个下界——这个方向上它是准的。
+
+### 12.2.1 审计记录的就地展示
+
+审计表最初只写不读。补上的入口是**就地注记**而非独立页面：时间线下方按 `pruned_at` 倒序列出该商品最近 `PRUNE_NOTE_LIMIT = 5` 次裁剪，每条一行——
+
+> ✂ 12 earlier movements deleted on 02 Aug 2026 　340 in, 180 out 　(12 Mar 2026 – 28 Jul 2026)
+
+选它是因为**解释要出现在被解释的东西旁边**：时间线突然变短的地方，紧接着就是变短的原因。放进菜单里的弹窗则要先怀疑、再点开才看得到。
+
+查询上把流水与裁剪记录合成 `fetchProductHistory`，两者一起取——只显示其一会误导：短时间线读起来像"没发生过事"，而真相是"记录被清了"。Server Action `loadProductMovements` 相应改名 `loadProductHistory`，列表页的客户端缓存改存 `ProductHistory`。
+
+**一处必须联动的空态**：`StockMovementsTimeline` 的空态文案把责任推给遗留系统导入（"legacy system kept no usable history"），那只在没删过东西时成立。所以全删之后时间线整个不渲染，由注记独自解释——否则页面会对着自己刚删掉的东西说"当初导入就没有历史"。
+
+### 12.3 本轮遗留
+
+- **裁剪没有权限分级**：任何 `authenticated` 都能清空任意商品的流水。当前系统没有角色概念（§9 的 `created_by` 那条也提到这点），引入角色时应把 `prune_product_movements` 的 EXECUTE 收给管理员角色。
+- **审计记录只在商品维度可见**：§12.2.1 的注记按商品显示、且只取最近 5 条，看不到"谁删的"（`pruned_by` 未展示，当前也只会是唯一的登录账号）。跨商品的运维视图（谁在什么时候删过什么、可按人筛）仍待建，数据已在 `inventory_movement_prunes` 里备好。
+
 ---
 
 **迁移层与四处 UI 均已交付并验证通过。**

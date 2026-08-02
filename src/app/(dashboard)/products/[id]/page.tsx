@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { fetchProductLookupOptions } from "@/lib/queries/products"
 import { fetchProductKitItems } from "@/lib/queries/product-kit-items"
 import {
-  fetchProductMovements,
+  fetchProductHistory,
   fetchProductStockLines,
 } from "@/lib/queries/inventory"
 import { fetchLocationOptions } from "@/lib/queries/locations"
@@ -61,7 +61,7 @@ export default async function ProductDetailPage({
   // Kits are barred from holding stock (migration 20260801130000), so the three
   // stock queries are skipped for them — the panel renders an explanation
   // instead of a table.
-  const [kit, pricing, componentCosts, stock, movements, locations] =
+  const [kit, pricing, componentCosts, stock, history, locations] =
     await Promise.all([
       product.is_kit
         ? fetchProductKitItems(supabase, product.id)
@@ -74,8 +74,8 @@ export default async function ProductDetailPage({
         ? Promise.resolve({ lines: [], error: null })
         : fetchProductStockLines(supabase, product.id),
       product.is_kit
-        ? Promise.resolve({ movements: [], error: null })
-        : fetchProductMovements(supabase, product.id),
+        ? Promise.resolve({ movements: [], prunes: [], error: null })
+        : fetchProductHistory(supabase, product.id),
       product.is_kit
         ? Promise.resolve({ options: [], error: null })
         : fetchLocationOptions(supabase),
@@ -108,9 +108,10 @@ export default async function ProductDetailPage({
             productId={product.id}
             isKit={product.is_kit}
             lines={stock.lines}
-            movements={movements.movements}
+            movements={history.movements}
+            prunes={history.prunes}
             locations={locations.options}
-            error={stock.error ?? movements.error ?? locations.error}
+            error={stock.error ?? history.error ?? locations.error}
           />
         }
         kit={

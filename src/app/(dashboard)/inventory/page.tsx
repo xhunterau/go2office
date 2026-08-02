@@ -33,10 +33,13 @@ export default async function InventoryPage({
     <div className="flex flex-1 flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">Inventory</h1>
+          <h1 className="text-lg font-semibold text-foreground">
+            Stock overview
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Products holding stock. Open one to receive, dispatch or count it —
-            or set Stock to All to include products at zero.
+            Products holding stock. Expand a row for its locations and movement
+            history, or use the row menu to receive, dispatch, move and count.
+            Set Stock to All to include products at zero.
           </p>
         </div>
         {/* A failed count only costs the button its number, so it is not folded
@@ -54,6 +57,7 @@ export default async function InventoryPage({
         <>
           <InventoryTable
             rows={list.rows}
+            locations={locations.options}
             hidingZeroStock={filters.status === "in_stock"}
           />
           <InventoryPagination

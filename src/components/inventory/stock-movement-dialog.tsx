@@ -87,6 +87,7 @@ export function StockMovementDialog({
   locations,
   lines,
   presetLocationId,
+  onSuccess,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -95,6 +96,10 @@ export function StockMovementDialog({
   locations: LocationOption[]
   lines: ProductStockLine[]
   presetLocationId?: number | null
+  // Fired once the ledger has actually changed. Server data refreshes itself
+  // through revalidatePath; this is for callers holding client-side state the
+  // movement invalidates, such as a cached history on the list page.
+  onSuccess?: () => void
 }) {
   const [isPending, startTransition] = React.useTransition()
   const copy = COPY[action]
@@ -192,6 +197,7 @@ export function StockMovementDialog({
         toast.info("Count matched the recorded quantity. Nothing changed.")
       } else {
         toast.success(`${copy.submit} recorded`)
+        onSuccess?.()
       }
       onOpenChange(false)
     })
