@@ -18,6 +18,15 @@ function display(value: string | number | null | undefined): string {
   return String(value)
 }
 
+// products.currency describes ONE column: purchase_price. Everything else money
+// on this row is AUD, including retail_price -- the pricing view subtracts
+// unit_cost_aud from it directly (`retail_ex_gst - unit_cost_aud AS
+// retail_profit`, migration 20260729120000), which is arithmetic that only holds
+// if both sides are the same currency.
+//
+// So retail is formatted with a literal "AUD", never with product.currency.
+// Passing the row's currency there labelled 2258 products' Australian retail
+// prices as CNY -- and read as a yuan price on the 943 of them that have one.
 function formatPrice(value: number | null, currency: Currency | null): string {
   if (value === null) return "—"
   return new Intl.NumberFormat("en-AU", {
@@ -70,8 +79,10 @@ function sectionRows(
           value: derived(formatPrice(pricing?.unit_cost_aud ?? null, "AUD")),
         },
         {
+          // Not derived: a kit's retail price is set by hand on its own row,
+          // unlike the cost inputs above it.
           label: "Retail Price",
-          value: formatPrice(product.retail_price, product.currency),
+          value: formatPrice(product.retail_price, "AUD"),
         },
         {
           label: "Weight",
@@ -92,12 +103,13 @@ function sectionRows(
         { label: "Currency", value: display(product.currency) },
         { label: "GST", value: yesNo(product.is_gst) },
         {
+          // Purchase price is the one figure denominated in product.currency.
           label: "Purchase Price",
           value: formatPrice(product.purchase_price, product.currency),
         },
         {
           label: "Retail Price",
-          value: formatPrice(product.retail_price, product.currency),
+          value: formatPrice(product.retail_price, "AUD"),
         },
         { label: "Weight", value: formatWeight(product.weight) },
         {
