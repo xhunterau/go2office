@@ -1,0 +1,496 @@
+# Orders / Customers UI 轮次 — 开发文档
+
+> 状态：**计划中，四项决策已确认；`order_status` 已扩展到 10 个值**（2026-08-02，见 §4 / §4.2）
+> 前置文档：`docs/orders-domain-migration.md`（迁移层已完成并验证，四表已落库）
+> 参考前轮：`docs/inventory-ui.md`（列表页 + 行展开 + Dialog 的既有骨架，本轮大量复用）
+> 相关规则：CLAUDE.md 规则 2（RESTful 路由）、6（双重校验）、7（ActionResult + sonner）、9（全局 useConfirm）、12（Dialog 视口安全）、18（types 手工维护）
+
+## 1. 目标
+
+在已迁移的 orders 域四表之上落地三处 UI：
+
+1. `/orders` 订单列表页
+2. `/orders/[id]` 订单详情页（独立路由，非弹窗）
+3. `/customers` 客户 CRUD 与 `/customers/[id]` 客户详情（含订单历史）
+
+侧边栏的 `Orders` 与 `Customers` 两个入口**已存在**，目前指向 `PlaceholderPage`（[orders/page.tsx](src/app/(dashboard)/orders/page.tsx)、[customers/page.tsx](src/app/(dashboard)/customers/page.tsx)），本轮替换掉它们。
+
+## 2. 数据现状（迁移后实测，全部来自 `docs/orders-domain-migration.md` §12–13）
+
+| 表 | 行数 | 说明 |
+|---|---|---|
+| `customers` | **178,024** | 由 196,085 行 `go2_buyers` 按 eBay 用户名/邮箱去重而来；全部有地址 |
+| `orders` | **203,315** | 发票号全局唯一，是主要检索入口 |
+| `order_transactions` | **250,413** | 平台卖出的**listing**（标题、listing id、售价） |
+| `order_items` | **250,687** | 仓库实际拣的**内部 SKU**，由 trigger 维护 |
+| `order_totals`（视图） | — | `goods_total` / `order_total` / `transaction_count` |
+
+分布上几个对 UI 设计有直接影响的事实：
+
+- **状态极度倾斜**：completed 202,778 / cancelled 527 / processing 9 / issued 1。但枚举本身有 **10 个值**（迁移 `20260804100000` 补齐了 Laravel 下拉的全部选项），另外 6 个当前为 0 只是因为备份那一刻没订单停在上面。详见 §4.2——这条直接决定了 §5.2 的状态入口怎么做。
+- **平台**：ebay 178,244 / shopify 20,624 / backorder 3,878 / store 569。
+- **运送方式**：173,797 张落在新枚举（34 个值）、**29,143 张（14.3%）落在 `legacy_shipping_method` 文本列**（7 个已停用承运商）、375 张为空。
+- **4,919 张订单 `posted_on_date` 为空**（未发货）。
+- **25 张订单没有任何交易行**（`order_totals` 对它们返回 0）。
+- **313 行 `order_items.product_id` 为空**（14 个 SKU、331 件）——`custom_label` 匹配不到任何商品，是需要人工修的工作队列，DB 里已有专门的部分索引 `order_items_unresolved_idx` 支撑它。
+- **`sale_price` 可以是负数**（退款/冲正行，最低 -640.00）。金额展示不能假设非负。
+
+## 3. 本轮与前几轮的根本差异：数据规模
+
+products 3,122 行、inventory 2,098 行的写法**不能原样平移到 203,315 行**。三个具体问题：
+
+### 3.1 分页计数
+
+`fetchProductList` / `fetchInventoryList` 用的是 PostgREST 默认的 `count: "exact"`——每次列表请求附带一次完整 `COUNT(*)`。在 3,122 行上无感，在 203,315 行上、再叠加 `ilike` 筛选，就是每翻一页做一次全表扫。
+
+可选：`count: "estimated"`（先取 planner 估算，估算值小于阈值时才退回精确计数）、`count: "planned"`（永远只用估算）、或干脆不显示总数改用游标式翻页。**已定为估算计数**，见 §4 决策 2。
+
+### 3.2 模糊搜索没有可用索引
+
+现有索引全是普通 btree：
+
+| 列 | 现有索引 | `ilike '%x%'` 能用吗 |
+|---|---|---|
+| `orders.invoice_number` | UNIQUE btree | ❌（等值查询可以） |
+| `orders.tracking_number` | btree | ❌ |
+| `customers.full_name` | btree | ❌ |
+| `customers.email` | btree on `lower(email)` | ❌（`lower()` 等值可以） |
+| `order_transactions.custom_label` | btree | ❌ |
+
+非 C collation 下，普通 btree 连 `LIKE 'x%'` 前缀匹配都用不上。要让搜索框可用，需要**新增一个迁移启用 `pg_trgm` 并建 GIN 索引**。这是本轮唯一必需的 schema 改动，见 §8.1。
+
+不加索引的后果不是"慢一点"：178k 行 + 203k 行上的 `ilike '%x%'` 是每次按键都触发一次双表全扫。
+
+### 3.3 `order_totals` 不能 join 进列表查询
+
+这条是迁移文件 `20260803160000_create_order_totals_view.sql` 尾部**写死的告诫**：该视图每被引用一次就聚合全部 250,413 行交易，`JOIN` 进分页查询等于"算 203,315 个总额来显示 20 个"。
+
+正确写法是**先分页、再按当页 id 取总额**：
+
+```ts
+const { data: rows } = await supabase.from("orders").select(LIST_COLUMNS).range(...)
+const { data: totals } = await supabase
+  .from("order_totals")
+  .select("order_id, goods_total, order_total, transaction_count")
+  .in("order_id", rows.map((r) => r.id))
+```
+
+**直接后果：列表页不能按金额排序，也不能按金额筛选。** 那需要物化视图或 trigger 维护的存储列，按迁移注释的说法"要做时再决定，现在不要预建"。本轮不做，UI 上也不提供这两个入口。
+
+## 4. 已确认决策（2026-08-02）
+
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | 本轮功能边界 | 基线（订单列表 + 订单详情 + 客户 CRUD）**加**：订单字段编辑、`/customers/[id]` 客户详情页 + 订单历史。**不做**：未解析明细修复队列、发货扣库存联动（均移入 §13 下一轮） |
+| 2 | 分页计数 | **估算计数**（`count: "estimated"`）。无筛选时显示"约 203,000"，加筛选把结果缩小后自动变精确 |
+| 3 | 搜索维度 | 发票号 + 追踪号；客户名 / 邮箱 / eBay 用户名；**按 SKU 反查订单**；**客户 postcode 与 suburb**；订单 status |
+| 4 | 详情页结构 | **交易行表格 + 行内展开拣货明细**，默认收起 |
+
+### 4.1 关于决策 3 的两点澄清
+
+**"suburb" 在库里叫 `city`。** `customers` 表没有 `suburb` 列——第四轮把地址从 `orders` 上移时用的是通用命名（`city` / `state` / `postcode` / `country`），澳洲语境的 suburb 就存在 `city` 里。本轮的处理是**只改 UI 标签不改列名**：界面上写 `Suburb`，查询读 `customers.city`。
+
+改列名不划算：`scripts/migration/004_orders_data.sql` 与迁移 `20260803170000` 都写着 `city`，按规则 15 得同步改，而收益只是一个词。但**这个错位必须写在查询层的注释里**，否则下一个人会去找不存在的 `suburb` 列。
+
+另外注意这批地址是**原样迁移、未做规范化**的（迁移文档 §4.3）：state 列里 `NSW` 和 `New South Wales` 并存，country 里 `AU` 和 `Australia` 并存。suburb 同理会有大小写和拼写差异，所以 suburb 搜索必须是**大小写不敏感的模糊匹配**，不能做等值。
+
+**status 是筛选器不是搜索框。** 订单状态是一个封闭枚举，做成下拉 Select（§5.2）比让人往搜索框里打字合适。实况见 §4.2。
+
+### 4.2 `order_status` 实况（2026-08-02 实测 + 枚举扩展）
+
+**类型**：Postgres 原生枚举 `public.order_status`，`orders.status` 列 `NOT NULL`、**无默认值**。TS 侧用 `Database["public"]["Enums"]["order_status"]`，`z.enum` 直接对齐。
+
+**10 个值，声明顺序即业务生命周期**（迁移 `20260804100000` 在原有 4 个基础上补齐了 Laravel 下拉的全部选项，详见 `docs/orders-domain-migration.md` §15）：
+
+| pos | label | 语义 | 当前订单数 |
+|---|---|---|---|
+| 1 | `new` | 刚进来 | 0 |
+| 2 | `pending` | 待处理 | 0 |
+| 3 | `unpaid` | 未付款（阻塞） | 0 |
+| 4 | `backorder` | 缺货待补（阻塞） | 0 |
+| 5 | `processing` | 处理中 | 9 |
+| 6 | `picked` | 已拣货 | 0 |
+| 7 | `labelled` | 已打面单 | 0 |
+| 8 | `issued` | 已发出 | 1 |
+| 9 | `completed` | 已完成 | **202,778** |
+| 10 | `cancelled` | 已取消 | 527 |
+
+那 6 个 0 不代表用不上——它们是 Laravel 一直提供的选项，只是最终备份的那一刻没有订单停在上面。**上线后新订单会真正铺开在这 10 个状态上**，这也是 §5.2 把状态筛选器从配角改成主角的原因。
+
+枚举遍历顺序就是生命周期顺序，所以下拉菜单直接按 `Database["public"]["Enums"]["order_status"]` 的声明序渲染即可，不要另建一套排序常量（两份顺序必然漂移）。
+
+### 4.2.1 三个实测发现，每个都影响界面
+
+**其一，`completed` ≠ 已发货，而且是持续性的**：
+
+| status | 有 `posted_on_date` | 无 `posted_on_date` |
+|---|---|---|
+| completed | 198,281 | **4,497** |
+| cancelled | **113** | 414 |
+| processing | 1 | 8 |
+| issued | 1 | 0 |
+
+4,497 张已完成但从未发货，逐年都在发生（2020: 279、2022: 909、2025: 729、2026: 590），不是当年导入的历史残渣；反过来 113 张已取消的订单确实发出去了。**status 与发货状态是两个独立事实**，状态徽章不能代替发货状态——§5.2 的 `Not dispatched` 独立开关因此是必需的，而不是"筛 processing 就行"。
+
+**其二，那 9 张 `processing` 是 Laravel 停机时卡在手上的在途单**：全部创建于 2026-07-11 ~ 07-13，而全库最后一张订单就是 2026-07-13，其中 8 张连追踪号都还没有。上线后运营要做的第一件事就是把它们推下去——这也是"订单字段编辑"（决策 1）的第一个真实用例。
+
+**其三，`issued` 全库只有 1 行**（2025-06-14，已发货且有追踪号），看着像一次误操作。下拉里保留它（枚举删值代价极高，且那一行还在），但不要把它做进任何默认流程或快捷按钮。
+
+### 4.2.2 `backorder` 在两个枚举里都有
+
+`order_status.backorder`（等补货）与 `sales_platform.backorder`（销售渠道，3,878 张历史订单）现在同名。DB 层互不干扰，但界面上会出现两个都写着 Backorder 的徽章指两件事。
+
+**处理**：状态徽章文案写 `On backorder`，平台徽章保持 `Backorder`。两者视觉样式也要分开（状态徽章是阻塞态的琥珀色，平台徽章是中性色）。
+
+### 4.2.3 `updated_at` 目前不携带业务含义
+
+`orders.updated_at` 全部 203,315 行都落在 2026-08-02 那一个半小时内（迁移执行时刻，distinct 天数 = 1）。详情页**不要显示 "Last updated"**——那会让人以为这批订单昨天被人动过。等真有编辑发生后它才开始有意义。
+
+## 5. `/orders` 订单列表页
+
+沿用 `/inventory` 的骨架（Server Component 页面 + 客户端筛选栏 + 分页 + 行展开），三个组件近乎 1:1 平移。
+
+### 5.1 列
+
+| 列 | 内容 | 备注 |
+|---|---|---|
+| （chevron） | 展开显示交易行摘要 | 同 `/inventory` 的单行展开 |
+| `Invoice` | `invoice_number` | 链接到 `/orders/[id]` |
+| `Date` | `created_at` | 默认排序列（DESC，有索引） |
+| `Customer` | `customers.full_name`（回落 `platform_user_id`） | 内嵌 select，链到客户详情 |
+| `Platform` | 徽章 | ebay / shopify / backorder / store |
+| `Status` | 徽章 | 10 个值（§4.2）。completed / cancelled 用中性色，阻塞态（unpaid / backorder）琥珀色，其余流转态着色 |
+| `Items` | `order_totals.transaction_count` | |
+| `Total` | `order_totals.order_total` | 右对齐 tabular-nums；**不可排序**（§3.3） |
+| `Shipping` | `COALESCE(shipping_method, legacy_shipping_method)` | legacy 值加一个弱化标记，见 §5.4 |
+| `Dispatched` | `posted_on_date`，空显示 `—` | |
+| （⋯） | `View order` / `Edit` / `Copy invoice number` | |
+
+### 5.2 筛选与搜索
+
+**状态：从筛选项升为页面主结构**
+
+枚举补到 10 个值之后（§4.2），状态不再是"偶尔用来捞异常单"的下拉项——`unpaid` 待催款、`backorder` 待补货、`picked` 待打单、`labelled` 待发出，每一个都是一条日常工作队列。所以状态入口放在**列表顶部的一排 tab**，而不是埋进筛选栏：
+
+```
+[ All ]  [ Needs action ]  [ Unpaid ]  [ Backorder ]  [ Picked ]  [ Labelled ]  [ Completed ]  [ Cancelled ]
+```
+
+- **`Needs action`** 是聚合项：`status NOT IN ('completed','cancelled')`。这是运营每天真正要盯的那一屏，也是唯一一个不随枚举增删而失效的入口。
+- tab 上带计数。**但计数必须走单独一次 `GROUP BY status` 聚合查询**，不是每个 tab 各发一次 count——`orders_status_idx` 在这上面是一次索引扫，比 8 次分别 count 便宜得多。
+- 历史数据下这排 tab 会显得很空（99.7% 落在 Completed），**这是正常的**，不要因此把它做成动态隐藏空 tab——那样上线后队列有货了反而看不见入口。
+- 完整的 10 值下拉仍保留在筛选栏里，覆盖 tab 没铺开的 `new` / `pending` / `processing` / `issued`。
+
+**其余下拉 / 开关筛选**
+
+- `Platform`（Select）
+- **`Not dispatched`（Switch）**：`posted_on_date IS NULL`，4,919 张。**它与状态 tab 不重复**——§4.2.1 实测有 4,497 张 completed 却没发货、113 张 cancelled 却发了货，状态筛不出这批
+- 日期区间（`created_at`），默认不限
+
+**搜索（决策 3，五个维度）**
+
+不做"一个搜索框猜用户想搜什么"。五个维度的解析路径、索引需求、匹配语义都不同，混在一起意味着每次按键跑五路查询、还得猜哪路才是用户要的。改为**一个带维度选择器的搜索框**（`Invoice / Tracking / Customer / Suburb or postcode / SKU`），选中哪个就只跑哪一路。
+
+| 维度 | 目标列 | 匹配 | 解析路径 |
+|---|---|---|---|
+| Invoice | `orders.invoice_number` | 模糊 | 直接 |
+| Tracking | `orders.tracking_number` | 模糊 | 直接 |
+| Customer | `customers.full_name` / `email` / `platform_user_id` | 模糊 | 嵌入过滤，§5.3 |
+| Suburb / postcode | `customers.city` / `postcode` | suburb 模糊、postcode 前缀 | 嵌入过滤，§5.3 |
+| SKU | `products.sku` | **精确** | 两跳，§5.3 |
+
+### 5.3 三条跨表搜索路径的实现
+
+**客户维度与地址维度**走 PostgREST 的内嵌 `!inner` 过滤，让 semi-join 在 DB 里完成、分页仍落在 `orders` 上：
+
+```ts
+supabase
+  .from("orders")
+  .select("id, invoice_number, ..., customers!inner(full_name, city, postcode)",
+          { count: "estimated" })
+  .ilike("customers.full_name", `%${escaped}%`)
+  .order("created_at", { ascending: false })
+  .range(from, to)
+```
+
+**不要**改成"先查 customers 拿一批 id、再 `.in('customer_id', ids)`"：一个常见姓氏能命中几千个客户，那个 `IN` 列表会先撑爆 URL 长度，再撑爆查询计划。
+
+**SKU 维度是唯一需要两跳的**，因为 `orders → order_transactions → order_items` 隔了两层：
+
+```ts
+// 第一跳：SKU 精确解析成 product_id（products.sku 唯一且有索引）
+// 第二跳：嵌入过滤，order_items 的 product_id 条件下推到底层
+supabase
+  .from("orders")
+  .select("..., order_transactions!inner(order_items!inner(product_id))")
+  .eq("order_transactions.order_items.product_id", productId)
+```
+
+**SKU 用精确匹配而不是模糊**，有两个理由：SKU 是标识符不是描述（`GBDL00226` 模糊搜没有语义），而且精确匹配走 `products.sku` 的既有唯一索引，省掉一个 250,687 行上的 GIN 索引。搜不到时给的提示是 `No product matches this SKU.`——把"SKU 不存在"和"这个 SKU 没卖过"区分开，后者才显示空订单列表。
+
+这条路径是本轮**唯一需要实测计划的查询**：热销 SKU 在 `order_items` 里可能有上万行，两层 `!inner` 的执行计划要用 `EXPLAIN ANALYZE` 确认走的是 `order_items_product_id_idx` 而不是 hash join 全表。见 §11 第 1 项。
+
+### 5.4 运送方式的显示
+
+`shipping_method` 枚举用的是 `PascalCase_Snake` 拼写（`Mypost_Reg_S_Box`），与项目其他枚举的小写风格不一致——这一点在迁移时就是**已知并接受**的（`docs/orders-domain-migration.md` §4.1），不会改。
+
+所以需要一张 34 项的展示映射表 `SHIPPING_METHOD_LABELS`（`Mypost_Reg_S_Box` → `MyPost Regular S Box`），放 `src/lib/orders/shipping-method.ts`，列表页与详情页共用。
+
+`legacy_shipping_method` 的 7 个值（Zone6 Regular/Express、Sendle、Sendle 250g、Winit、Fast Track、Toll B2C）**不进下拉选项**——它们是已停用承运商。显示时以弱化样式加 `(retired)` 后缀。字段编辑已采纳（决策 1），所以编辑器里这 29,143 张订单必须显示"当前值已停用，保存将改为新枚举值"的提示，因为保存一次就再也回不去了。
+
+## 6. `/orders/[id]` 订单详情页
+
+### 6.1 三层语义必须在界面上分清
+
+这是整个订单域最容易做错的地方。`order_transactions` 与 `order_items` **不是**主从关系的两种写法，它们是两件不同的事：
+
+- `order_transactions` = **平台卖出的 listing**：标题、eBay listing id、`custom_label`、售价、数量。这是买家看到的东西。
+- `order_items` = **仓库实际拣的内部 SKU**：一个套装在上面卖成一行，在这里展开成多行组件。这是仓库做的事。
+
+拍平成一张表必然丢掉其中一个。界面必须让人看得出"卖了 1 个套装"和"拣了 5 个 SKU"说的是同一件事。
+
+**按决策 4：交易行一张表，每行 chevron 展开显示该行的拣货明细**（父子关系直接可见），默认全部收起——250 行明细一次铺开会把页面淹掉。交互与 `/inventory` 的行展开一致（同一时刻只展开一行），组件可直接沿用那一轮的骨架。
+
+```
+Transactions (2)
+┌──┬────────────────────┬─────┬──────┬────────┐
+│  │ Item               │ Qty │ Price│ Total  │
+├──┼────────────────────┼─────┼──────┼────────┤
+│ ▶│ Desk Bundle (KIT)  │  1  │ 89.95│  89.95 │
+│ ▼│ A4 Paper Box       │  2  │ 24.95│  49.90 │
+│  │   └ Picked items                          │
+│  │     PPR-A4-500  ×2   P-1-3                │
+└──┴────────────────────┴─────┴──────┴────────┘
+```
+
+展开区里每行显示 `sku_snapshot`（有 `product_id` 时链到商品详情）、数量、拣货库位。**明细数据随详情页一次取完**，不做按需加载：`/inventory` 那轮的懒加载是因为列表页有 20 行 × 20 条流水，这里一张订单的明细中位数是个位数（250,687 / 203,315 ≈ 1.2 行/交易），多一次往返不值得。
+
+### 6.2 页面分区
+
+```
+┌ Header ─────────────────────────────────────────────┐
+│ Invoice 180048CF        [completed] [ebay]          │
+│ Created 12 Mar 2026 · Dispatched 14 Mar 2026        │
+│                                    [Edit] [⋯]      │
+├ 三栏摘要 ───────────────────────────────────────────┤
+│ Customer          │ Shipping         │ Totals       │
+│ 姓名/邮箱/电话     │ 方式/追踪号      │ Goods        │
+│ 收件地址 ⚠         │ Web order id     │ Postage      │
+│ → 客户详情         │                  │ Order total  │
+├ Transactions ───────────────────────────────────────┤
+│ 交易行表格 + 行内展开拣货明细（§6.1）                 │
+├ Comments ───────────────────────────────────────────┤
+└─────────────────────────────────────────────────────┘
+```
+
+### 6.3 收件地址那个 ⚠ 是必需的
+
+第四轮评审把收件地址从 `orders` 移到了 `customers`（`docs/orders-domain-migration.md` §13.3），**代价是明确接受过的**：实测 8,150 张订单（4%，涉及 5,483 个客户）的实际收件地址与该客户现在的地址不同，那些历史地址已经不可查。
+
+所以订单详情页上那块地址**不是"这张订单寄到了哪"，而是"这个客户现在住哪"**。地址块必须带一句说明（`Current customer address — not a snapshot of where this order shipped.`），否则运营查退件、查投诉时会把它当成当年的发货地址用。这是一处纯文案成本、能挡掉真实误判的地方。
+
+### 6.4 交易行的可编辑性与 trigger 的联动（决策 1 已采纳字段编辑）
+
+`order_transactions` 上挂着两个 trigger（`..._rebuild_items_insert` / `..._rebuild_items_update`），**改动 `custom_label` 或 `quantity` 会立即重建该交易行下的全部 `order_items`**。重建时：
+
+- 拣货库位按 product_id 尽量继承，**掉出新展开范围的商品，其库位就丢了**；
+- 人工修过的行（`is_auto_generated = false`）会被覆盖成 trigger 生成的行。
+
+trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑堵住了（只有值真的变化才触发），但 UI 仍然必须：
+
+1. 把 `custom_label` / `quantity` 的编辑与其他字段的编辑**分开**，不放在同一个"保存全部"按钮下；
+2. 修改这两个字段前用全局 `useConfirm`（规则 9）提示会重建拣货明细并可能丢失手工调整。
+
+同理，详情页 `⋯` 菜单里的 `Rebuild picked items`（调 `rebuild_order_items_for_order(order_id)`）是**唯一支持的"把历史订单按当前 BOM 重算"的手段**，也是破坏性的——它会把当年实际发出去的明细替换成今天的 BOM。文案要写死："This replaces what was actually shipped with today's kit contents."
+
+### 6.5 未解析明细的标记
+
+`product_id IS NULL` 的行在详情页要显眼（琥珀色行 + `Unresolved` 徽章），并显示 `sku_snapshot`——那是唯一的线索。
+
+按决策 1，**集中的修复队列本轮不做**（移入 §13）。所以这 313 行在本轮只是"看得见、改不了"：详情页标出来，但没有指派商品的入口。这是有意的取舍，不是遗漏——但要知道它意味着 14 个 SKU 的销售数据在报表里会一直缺着，直到下一轮补上队列。
+
+### 6.6 `is_auto_generated` 的显示
+
+迁移进来的 250,687 行全部是 `false`（= Laravel 的真实记录），trigger 生成的是 `true`。这个区别对运营是有意义的：`false` 意味着"这是当年实际发生的"，`true` 意味着"这是系统按 BOM 算出来的"。用一个安静的图标或 tooltip 表达，不用整列。
+
+## 7. `/customers` 与 `/customers/[id]`
+
+### 7.1 列表页
+
+与 `/orders` 同骨架，同样用估算计数（178,024 行）。
+
+| 列 | 内容 |
+|---|---|
+| `Customer` | `full_name`，空则回落 `platform_user_id`，再空回落 `email` |
+| `eBay user` | `platform_user_id`，20,347 行为空 |
+| `Email` | `email` + `is_anonymised_email` 标记（见 §12） |
+| `Suburb` | `city` 列（见 §4.1） |
+| `State` / `Postcode` | 原样，未规范化 |
+| `Orders` | 该客户订单数 |
+| （⋯） | Edit / Delete |
+
+**`Orders` 这一列有代价**：178k 客户逐行数订单是 N+1，而 `orders` 上没有现成的按客户聚合。两条路——PostgREST 的 `orders(count)` 内嵌聚合（一次请求、DB 侧做，当页 20 行成本可控），或干脆不要这列。**建议用内嵌聚合并实测**；若 `EXPLAIN` 显示它退化成对全表分组，就砍掉这列，改为只在客户详情页显示订单数。
+
+筛选：姓名 / 邮箱 / eBay 用户名（模糊）、suburb、postcode、`Has orders` 开关（1,790 个客户没有任何订单，见迁移文档 §13.4）。
+
+### 7.2 客户详情页
+
+`/customers/[id]`，两块：
+
+1. **客户资料**：姓名、邮箱（带匿名标记）、电话、eBay 用户名、地址九列。`Edit` 打开与列表页共用的 `customer-form-dialog`。
+2. **订单历史**：该客户的订单列表，复用 `/orders` 的表格组件（去掉 Customer 列），按 `created_at DESC` 分页。
+
+这块是 `customers` 表存在的**全部理由**——`go2_buyers` 每导一张订单就插一行，196,085 行里 185,241 行只服务一张订单；去重到 178,024 就是为了让"这个人一共买过什么"这个问题能被问出来（迁移文档 §4.2）。
+
+### 7.3 地址在这里是可编辑的，含义要写清
+
+`customers` 上的地址是**当前地址**，改了它就等于改了这个客户名下**所有**历史订单详情页显示的收件地址（§6.3）。表单里那块地址要带一句 `Used for all of this customer's orders, including past ones.`
+
+这不是设计缺陷，是第四轮决策 16 明确接受的代价（迁移文档 §13.3：8,150 张订单的真实收件地址已不可查）。但改地址的人必须知道自己在改什么。
+
+## 8. Schema 改动
+
+### 8.1 必需：`pg_trgm` 与搜索索引
+
+文件：`supabase/migrations/2026080410xxxx_create_orders_search_indexes.sql`
+
+按决策 3 的五个维度倒推，需要建的索引如下——**只建实际要搜的列**：
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+
+-- 维度 1、2：发票号与追踪号
+CREATE INDEX orders_invoice_number_trgm_idx
+  ON public.orders USING gin (invoice_number extensions.gin_trgm_ops);
+CREATE INDEX orders_tracking_number_trgm_idx
+  ON public.orders USING gin (tracking_number extensions.gin_trgm_ops);
+
+-- 维度 3：客户名 / 邮箱 / eBay 用户名
+CREATE INDEX customers_full_name_trgm_idx
+  ON public.customers USING gin (full_name extensions.gin_trgm_ops);
+CREATE INDEX customers_email_trgm_idx
+  ON public.customers USING gin (email extensions.gin_trgm_ops);
+CREATE INDEX customers_platform_user_id_trgm_idx
+  ON public.customers USING gin (platform_user_id extensions.gin_trgm_ops);
+
+-- 维度 4：suburb（= city 列，见 §4.1）与 postcode
+CREATE INDEX customers_city_trgm_idx
+  ON public.customers USING gin (city extensions.gin_trgm_ops);
+-- postcode 是 4 位数字，用前缀匹配就够，普通 btree 即可；
+-- text_pattern_ops 是让 LIKE 'x%' 在非 C collation 下也能走索引的关键。
+CREATE INDEX customers_postcode_idx
+  ON public.customers (postcode text_pattern_ops);
+```
+
+**维度 5（SKU）不建索引**：走 `products.sku` 的既有唯一索引 + `order_items_product_id_idx`，见 §5.3。
+
+`customers.platform_user_id` 已有 UNIQUE btree，但那只服务等值查询，模糊搜索用不上——两个索引各司其职，不冲突。
+
+按规则 14 包 `BEGIN; / COMMIT;`。
+
+**体积要实测**：7 个 GIN 索引建在 178k + 203k 行上，建完跑一次 `pg_relation_size` 记录到本文档。如果某个索引大得离谱（尤其 `full_name`），再考虑把该维度降级为前缀匹配。先建再量，不要凭感觉砍。
+
+### 8.2 可能需要：订单列表用的扁平视图
+
+列表页要显示客户名，而客户名在另一张表。两条路：
+
+- **PostgREST 内嵌 select**（`customers(full_name, platform_user_id)`）——不需要迁移，但每行一次 join；
+- **建 `order_list` 视图**把客户名压平进来——查询更干净，但多一个需手工同步 `database.types.ts` 的对象（规则 18）。
+
+**建议先走内嵌 select**：`orders.customer_id` 有索引，一页 20 行的嵌套查询在这个规模上不构成问题，而视图省不掉那个 join、只是把它移到 DB 里。等确实测出慢再建视图。
+
+### 8.3 明确不做
+
+- **不建金额的物化视图/存储列**（§3.3）
+- **不动 `shipping_method` 枚举的拼写**（§5.4）
+- **发货扣库存本轮不做**（决策 1）。下一轮做时也**不能挂 trigger**，必须走显式的 Server Action + 已有的 `record_stock_movement` RPC：`order_items` 上一挂 trigger，203,315 张历史订单里任何一张被碰到就会开始扣库存，而它们的货十年前就发完了
+- **未解析明细的修复队列本轮不做**（决策 1），那 313 行只在详情页可见（§6.5）
+
+## 9. 查询层与 Server Actions
+
+### 9.1 查询（`src/lib/queries/`）
+
+| 文件 | 导出 |
+|---|---|
+| `orders.ts` | `ORDERS_PAGE_SIZE`、`parseOrderFilters`、`fetchOrderList`（含 §3.3 的两段式取总额、§5.3 的五路搜索分支）、`fetchOrderDetail`、`fetchOrderTransactionsWithItems` |
+| `customers.ts` | `CUSTOMERS_PAGE_SIZE`、`parseCustomerFilters`、`fetchCustomerList`、`fetchCustomerDetail`、`fetchCustomerOrders` |
+
+沿用 `parseInventoryFilters` 的既有写法：`text()` / `numeric()` 取值 + `escapeLike()` 转义 `%` `_`（[queries/inventory.ts:42](src/lib/queries/inventory.ts#L42)）。
+
+两处与既有查询层不同、必须写进注释的地方：
+
+1. **`count: "estimated"`**（决策 2）。既有的 `fetchProductList` / `fetchInventoryList` 用默认的 exact，照抄会把 20 万行的 COUNT 带进每一次翻页。分页组件要能显示"约 N"——`OrdersPagination` 不能直接复用 `InventoryPagination`，那个组件假设总数是精确的。
+2. **`customers.city` 就是 suburb**（§4.1）。查询层是这个错位唯一会被下一个人撞上的地方，注释写在 `parseCustomerFilters` 上。
+
+### 9.2 校验（`src/lib/validations/`，规则 6 双跑）
+
+- `order.ts`：`orderUpdateSchema`（status / platform 用 `z.enum`，与 DB 枚举逐值对齐；`tracking_number` `max(100)`；`comments` `max(2000)`；`postage_and_handling` 非负两位小数）、`transactionUpdateSchema`（`quantity` 正整数；`sale_price` **允许负数**——见 §2）
+- `customer.ts`：`customerSchema`（`full_name` / `email` / `phone` / 9 个地址列，全部可选但至少一项非空；`platform_user_id` 唯一性交给 DB）
+
+### 9.3 Server Actions（`src/lib/actions/`，规则 7 返回 `ActionResult`）
+
+| 错误码 | 场景 | 文案 |
+|---|---|---|
+| `23505` UNIQUE | `customers.platform_user_id` 重复 | `A customer with this platform user ID already exists.` |
+| `23505` UNIQUE | `orders.invoice_number` 重复 | `An order with this invoice number already exists.` |
+| `23503` FK | 删客户但仍有订单（`ON DELETE RESTRICT`） | `This customer has N orders on file and cannot be deleted.` |
+| `23514` CHECK | 交易行数量 ≤ 0 | `Quantity must be at least 1.` |
+
+**删除客户几乎必然失败**：178,024 个客户里绝大多数都有订单，`orders.customer_id` 是 `ON DELETE RESTRICT`。这与 `/locations` 删除库位是同一个形状（`docs/inventory-ui.md` §5.4），**是预期行为不是缺陷**——但错误文案必须带上订单数，否则用户只会看到一句无从下手的报错。
+
+`revalidatePath` 覆盖 `/orders`、`/orders/[id]`、`/customers`、`/customers/[id]`。
+
+## 10. 落地文件清单
+
+**新增（迁移）**
+- `supabase/migrations/2026080410xxxx_create_orders_search_indexes.sql`
+
+**新增（应用层）**
+- `src/lib/queries/orders.ts`、`src/lib/queries/customers.ts`
+- `src/lib/validations/order.ts`、`src/lib/validations/customer.ts`
+- `src/lib/actions/order.ts`、`src/lib/actions/customer.ts`
+- `src/lib/orders/shipping-method.ts`（34 项 label 映射 + legacy 值处理）
+- `src/app/(dashboard)/orders/_components/`：`orders-filters` / `orders-search` / `orders-table` / `orders-pagination` / `order-row-detail`
+- `src/app/(dashboard)/orders/[id]/page.tsx` + `_components/`：`order-detail-header` / `order-summary-cards` / `order-transactions-table`（含行内展开）/ `order-edit-dialog` / `transaction-edit-dialog`
+- `src/app/(dashboard)/customers/_components/`：`customers-filters` / `customers-table` / `customers-pagination` / `customer-form-dialog`
+- `src/app/(dashboard)/customers/[id]/page.tsx` + `_components/`：`customer-detail-header` / `customer-orders-table`
+
+**共享**：`/orders` 与 `/customers/[id]` 的订单表格是同一张（后者少一个 Customer 列），按规则 5 提取到 `src/components/orders/orders-table.tsx`，不要两份。这正是上一轮把库存组件挪进 `src/components/inventory/` 的同一个理由（`docs/inventory-ui.md` §12.1）。
+
+**修改**
+- `src/app/(dashboard)/orders/page.tsx`、`customers/page.tsx`（替换占位）
+- `src/lib/supabase/database.types.ts`：本轮四表与视图**已就位**，只有 §8.2 真的建了 `order_list` 视图时才需补（规则 18）
+
+## 11. 验证计划
+
+1. **索引真的被用上**：对搜索查询跑 `EXPLAIN ANALYZE`，确认走 `Bitmap Index Scan` 而非 `Seq Scan`。这是本轮唯一"看起来能用、实际全表扫"的地方——20 万行上跑得动，但每次都是几百毫秒起。
+2. **首屏耗时**：`/orders` 第 1 页、第 5,000 页各测一次。深翻页的 `OFFSET` 在 20 万行上会退化，若超过 1 秒需改游标分页。
+3. **trigger 联动**：改一条交易行的 `quantity`，确认 `order_items` 被重建、库位继承行为符合 §6.4；改订单的 `comments` / `tracking_number` 确认**没有**触发重建。后半句是本轮最重要的一次验证——trigger 的 `WHEN` 子句就是为它写的。
+4. **`rebuild_order_items_for_order`**：挑一个卖过套装的历史订单，确认重建后 `is_auto_generated` 变 `true`、行数符合当前 BOM。**测完要能回滚**——历史数据不可再生。建议先在测试订单上做。
+5. **未解析行**：确认 313 行在详情页正确高亮，`sku_snapshot` 有展示。
+6. **金额一致性**：抽查几张订单，`order_totals.order_total` 应等于 `Σ(sale_price × quantity) + orders.postage_and_handling`；至少测一张含负数 `sale_price` 的退款订单。
+7. **无交易行订单**：那 25 张应正常渲染为 0，不能白屏或报错。
+8. **删除客户被拦**：确认 `23503` 被翻译成带订单数的文案。
+9. **五路搜索各测一次**，尤其 SKU 反查（挑一个卖得最多的 SKU）与 suburb 模糊（挑一个大小写混杂的 suburb 名）。
+10. **索引体积**：建完索引跑 `pg_relation_size`，把 7 个 GIN 索引的实际大小记回 §8.1。
+11. **规则 12**：所有 Dialog 桌面端 + 移动端各验一次。
+
+## 12. 风险与注意事项
+
+- **订单录入通道不存在**：Laravel 停用后，eBay / Shopify 的订单**目前没有任何进入新系统的路径**。本轮做的是"管理已有订单"，不是"接单"。同步/导入需要单独一轮（按规则 4，属于 Trigger.dev 的活）。这是整个 orders 域上线前的硬阻塞，本文档只负责记录它。
+- **历史订单不能补扣库存**：`inventory_movements` 从迁移那天起账（`docs/inventory-ui.md` §9），203,315 张历史订单没有对应流水。下一轮做发货联动时必须限定为"从此以后新发的货"，且要有明确的界面/文案区分，否则会出现"这张 2019 年的订单为什么不扣库存"的困惑。
+- **本轮的订单编辑不影响库存**：改 status、打勾发货，库存数字都不会动（决策 1 把联动推到下一轮）。这件事要让用户知道，否则会以为系统在背后扣了。
+- **深翻页**：`OFFSET 100000` 在 Postgres 上是真的把前 10 万行数过去。20 万行、每页 20 条 = 10,164 页。实际上没人会翻到第 5,000 页，但**分页组件不该提供"跳到最后一页"**这种一键触发最坏情况的入口。
+- **`order_items` 的手工修改会被 trigger 悄悄吃掉**：§6.4 已述。这是本轮最容易做出"用户改完看起来成功了、刷新后没了"的地方。
+- **枚举扩展是单向的**：`shipping_method` 加值要 `ALTER TYPE ... ADD VALUE`（且不能在同一事务里用），删值基本不可能。UI 上不要提供任何"新增运送方式"的入口。
+- **`customers` 的去重口径**：按 eBay 用户名（回落邮箱）分组。同一个人用两个 eBay 账号会是两个客户，UI 上没有合并功能，本轮也不做。
+- **89,287 个客户的邮箱是 eBay 中继地址**（`@members.ebay.com`，已由 `is_anonymised_email` 标出）。客户列表/详情页展示邮箱时应带标记，否则将来做邮件功能的人会以为这些地址可达。
+
+## 13. 下一轮候选
+
+- **eBay / Shopify 订单同步（Trigger.dev）** —— 见 §12 第一条，这是上线前的硬阻塞，优先级最高
+- **发货 → 库存流水联动**（本轮由决策 1 推迟）
+- **未解析明细修复队列**（本轮由决策 1 推迟）：313 行 / 14 个 SKU，DB 索引已备好
+- 按金额排序/筛选（需物化视图或存储列，见 §3.3）
+- 客户合并（同一个人的两个 eBay 账号）
+- 订单打印 / 面单导出
