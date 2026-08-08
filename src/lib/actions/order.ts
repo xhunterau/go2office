@@ -4,14 +4,21 @@ import { revalidatePath } from "next/cache"
 
 import {
   isCheckViolation,
+  isForeignKeyViolation,
   isUniqueViolation,
   type ActionResult,
 } from "@/lib/actions/action-result"
+import {
+  fetchOrderTransactionsWithItems,
+  type OrderTransaction,
+} from "@/lib/queries/orders"
 import { createClient } from "@/lib/supabase/server"
 import {
   orderUpdateSchema,
+  transactionCreateSchema,
   transactionUpdateSchema,
   type OrderUpdateInput,
+  type TransactionCreateInput,
   type TransactionUpdateInput,
 } from "@/lib/validations/order"
 
@@ -35,6 +42,30 @@ function messageFor(error: { code?: string; message?: string }): string {
     return "One of the values is outside the range this order allows."
   }
   return error.message ?? "Something went wrong"
+}
+
+// The transaction lines behind one order, for the list page's row expansion.
+//
+// Fetched on demand rather than joined into fetchOrderList: 20 orders expand to
+// roughly 25 transactions and 30 picked items, and paying for that on every
+// page change to show what is collapsed by default is the same mistake as
+// joining order_totals (docs/orders-ui.md 3.3). Same shape as the inventory
+// list's loadProductHistory.
+export async function loadOrderTransactions(
+  orderId: number
+): Promise<ActionResult<OrderTransaction[]>> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+
+  const supabase = await createClient()
+  const { transactions, error } = await fetchOrderTransactionsWithItems(
+    supabase,
+    orderId
+  )
+
+  if (error) return { success: false, error }
+  return { success: true, data: transactions }
 }
 
 // Update the order's own fields.
@@ -83,6 +114,102 @@ export async function updateOrder(
 
   revalidateOrder(id)
   return { success: true }
+}
+
+// Add a transaction line by hand.
+//
+// order_transactions_rebuild_items_insert fires unconditionally on INSERT, so
+// the picked lines underneath are generated from custom_label as part of this
+// statement -- nobody types them. A plain product yields one line, a kit yields
+// one per BOM entry.
+//
+// Requiring the SKU to exist (below) does not rule out an unresolved result: a
+// kit with an empty BOM also expands to a single placeholder with product_id
+// NULL, and 24 such kits exist. Nothing about the insert reports that, so the
+// generated rows are read back and the outcome is named -- otherwise selling an
+// empty kit looks exactly like selling a well-formed one.
+export async function createOrderTransaction(
+  orderId: number,
+  input: TransactionCreateInput
+): Promise<
+  ActionResult<{ transactionId: number; itemCount: number; unresolved: boolean }>
+> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+
+  const parsed = transactionCreateSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    }
+  }
+
+  const supabase = await createClient()
+
+  // The SKU must resolve to a real product. The dialog only offers picked
+  // products, so this is the guard for anything that bypasses it -- and the
+  // reason it is worth having is that the database would not complain: an
+  // unknown label inserts happily and quietly becomes an unresolved picked line.
+  // Non-empty by the schema's refinement; the fallback is only here because the
+  // refinement cannot narrow the inferred type.
+  const label = parsed.data.custom_label?.trim() ?? ""
+  const { data: product, error: productError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("sku", label)
+    .maybeSingle()
+
+  if (productError) return { success: false, error: productError.message }
+  if (!product) {
+    return { success: false, error: `No product matches the SKU ${label}.` }
+  }
+
+  // Both dates are NOT NULL with no default. A hand-added line has no separate
+  // payment moment to record, so they get the same value.
+  const now = new Date().toISOString()
+
+  const { data, error } = await supabase
+    .from("order_transactions")
+    .insert({
+      order_id: orderId,
+      quantity: parsed.data.quantity,
+      sale_price: parsed.data.sale_price,
+      custom_label: label,
+      item_title: toNullable(parsed.data.item_title),
+      sale_date: now,
+      paid_on_date: now,
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    if (isCheckViolation(error)) {
+      return { success: false, error: "Quantity must be at least 1." }
+    }
+    if (isForeignKeyViolation(error)) {
+      return { success: false, error: "This order no longer exists." }
+    }
+    return { success: false, error: error.message }
+  }
+
+  // The line is already saved at this point, so a failed read-back downgrades
+  // the message rather than the outcome.
+  const { data: items } = await supabase
+    .from("order_items")
+    .select("product_id")
+    .eq("transaction_id", data.id)
+
+  revalidateOrder(orderId)
+  return {
+    success: true,
+    data: {
+      transactionId: data.id,
+      itemCount: items?.length ?? 0,
+      unresolved: (items ?? []).some((item) => item.product_id === null),
+    },
+  }
 }
 
 // Update one transaction line.
@@ -149,6 +276,36 @@ export async function updateOrderTransaction(
 
   revalidateOrder(orderId)
   return { success: true, data: { rebuiltPickedItems } }
+}
+
+// Delete one transaction line.
+//
+// The picked lines underneath go with it: order_items.transaction_id is
+// ON DELETE CASCADE, so no second statement is needed and none of them can be
+// left orphaned. Nothing else follows -- order_items carries no stock movements
+// yet (dispatch-to-inventory is a later round, docs/orders-ui.md 13), so this
+// only changes what the order says was sold.
+//
+// Leaving an order with no lines at all is allowed: 25 migrated orders are
+// already in that state, and order_totals reports 0 for them.
+export async function deleteOrderTransaction(
+  transactionId: number,
+  orderId: number
+): Promise<ActionResult> {
+  if (!Number.isInteger(transactionId) || transactionId <= 0) {
+    return { success: false, error: "Invalid transaction" }
+  }
+
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from("order_transactions")
+    .delete()
+    .eq("id", transactionId)
+
+  if (error) return { success: false, error: error.message }
+
+  revalidateOrder(orderId)
+  return { success: true }
 }
 
 // Recalculate every picked line on an order against today's kit contents.

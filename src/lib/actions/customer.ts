@@ -7,7 +7,11 @@ import {
   isUniqueViolation,
   type ActionResult,
 } from "@/lib/actions/action-result"
-import { countCustomerOrders } from "@/lib/queries/customers"
+import {
+  countCustomerOrders,
+  fetchCustomerDetail,
+  type CustomerDetail,
+} from "@/lib/queries/customers"
 import { createClient } from "@/lib/supabase/server"
 import { customerSchema, type CustomerInput } from "@/lib/validations/customer"
 
@@ -52,6 +56,27 @@ function parse(input: CustomerInput) {
     }
   }
   return { error: null, data: parsed.data }
+}
+
+// Every column of one customer, for the edit form.
+//
+// The form must be loaded from the full row, never from a list row: the list
+// carries eight of the thirteen editable columns, and updateCustomer writes all
+// thirteen. Opening the form on a partial row would save NULL over the phone,
+// company and address lines that were never on screen.
+export async function loadCustomer(
+  id: number
+): Promise<ActionResult<CustomerDetail>> {
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid customer" }
+  }
+
+  const supabase = await createClient()
+  const { customer, error } = await fetchCustomerDetail(supabase, id)
+
+  if (error) return { success: false, error }
+  if (!customer) return { success: false, error: "Customer not found" }
+  return { success: true, data: customer }
 }
 
 export async function createCustomer(

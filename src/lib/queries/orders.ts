@@ -24,7 +24,6 @@ type SalesPlatform = Database["public"]["Enums"]["sales_platform"]
 // directly (src/lib/validations/order.ts) without a cast that would let the two
 // lists drift apart.
 export const ORDER_STATUSES = [
-  "new",
   "pending",
   "unpaid",
   "backorder",
@@ -36,11 +35,25 @@ export const ORDER_STATUSES = [
   "cancelled",
 ] as const satisfies readonly OrderStatus[]
 
-// Statuses that mean the order is finished. Everything else is a work queue,
-// which is what the "Needs action" tab aggregates.
-export const TERMINAL_STATUSES = [
+// What "Needs action" leaves out. Two kinds of exclusion, both deliberate:
+//
+//   completed, cancelled  -- finished, nothing to do
+//   processing, picked, labelled, pending
+//                         -- already moving, and the first three have a tab of
+//                            their own, so counting them here would put the
+//                            same orders on the row twice
+//
+// What is left is the set nobody is currently acting on: unpaid (waiting on the
+// customer), backorder (waiting on stock), issued. Adding a status to the enum
+// puts it in Needs action by default, which is the safe direction -- a new
+// queue shows up rather than going unnoticed.
+export const NEEDS_ACTION_EXCLUDED = [
   "completed",
   "cancelled",
+  "pending",
+  "processing",
+  "picked",
+  "labelled",
 ] as const satisfies readonly OrderStatus[]
 
 export const SALES_PLATFORMS = [
@@ -240,7 +253,7 @@ export async function fetchOrderList(
     query = query.not(
       "status",
       "in",
-      `(${TERMINAL_STATUSES.join(",")})`
+      `(${NEEDS_ACTION_EXCLUDED.join(",")})`
     )
   } else if (filters.status !== null) {
     query = query.eq("status", filters.status)
@@ -387,9 +400,14 @@ export async function fetchOrderStatusCounts(
   for (const row of data ?? []) byStatus[row.status] = Number(row.order_count)
 
   const total = Object.values(byStatus).reduce((sum, n) => sum + n, 0)
-  const terminal = TERMINAL_STATUSES.reduce((sum, s) => sum + byStatus[s], 0)
+  // Subtracted rather than summed over the complement, so the tab's number and
+  // the tab's filter come from one list.
+  const excluded = NEEDS_ACTION_EXCLUDED.reduce(
+    (sum, status) => sum + byStatus[status],
+    0
+  )
 
-  return { counts: { byStatus, needsAction: total - terminal, total }, error: null }
+  return { counts: { byStatus, needsAction: total - excluded, total }, error: null }
 }
 
 const DETAIL_COLUMNS = `
@@ -503,6 +521,10 @@ export type OrderPickedItem = {
   // are), true means the trigger derived it from the current BOM.
   is_auto_generated: boolean
   product_name: string | null
+  // Straight off the resolved product, unlike the transaction's own image: here
+  // product_id is a real foreign key, so it embeds instead of needing a lookup.
+  // Null when the SKU resolved to nothing, or the product has no photo.
+  image_url: string | null
 }
 
 // One transaction: what the platform sold. A kit sells as a single line here
@@ -524,6 +546,11 @@ export type OrderTransaction = {
   // because the expansion is collapsed by default -- marking it only inside the
   // expanded area would make 313 unresolved lines invisible in practice.
   hasUnresolved: boolean
+  // The sold product's own image, resolved from custom_label. Deliberately not
+  // taken from the first picked item: a kit is picked as its components, and
+  // showing one component's photo for a bundle is worse than showing none.
+  // Null when the SKU matches no product, or when the product has no image.
+  image_url: string | null
 }
 
 // Both levels in one round trip. A kit expands into a handful of components
@@ -540,7 +567,7 @@ export async function fetchOrderTransactionsWithItems(
        sale_date, postage_service, order_id_ebay, transaction_id_ebay,
        order_items(
          id, product_id, sku_snapshot, quantity, location_id, is_auto_generated,
-         products(name), locations(name)
+         products(name, image_url), locations(name)
        )`
     )
     .eq("order_id", orderId)
@@ -548,7 +575,10 @@ export async function fetchOrderTransactionsWithItems(
 
   if (error) return { transactions: [], error: error.message }
 
-  type Raw = Omit<OrderTransaction, "items" | "hasUnresolved"> & {
+  type Raw = Omit<
+    OrderTransaction,
+    "items" | "hasUnresolved" | "image_url"
+  > & {
     order_items: {
       id: number
       product_id: number | null
@@ -556,12 +586,44 @@ export async function fetchOrderTransactionsWithItems(
       quantity: number
       location_id: number | null
       is_auto_generated: boolean
-      products: { name: string | null } | null
+      products: { name: string | null; image_url: string | null } | null
       locations: { name: string } | null
     }[]
   }
 
-  const transactions = ((data ?? []) as unknown as Raw[]).map((t) => {
+  const raw = (data ?? []) as unknown as Raw[]
+
+  // Thumbnails, in one extra round trip keyed on this order's SKUs.
+  //
+  // Not an embed: order_transactions has no foreign key to products -- the two
+  // are joined on custom_label = sku, which PostgREST cannot express. The lookup
+  // rides the unique index on products.sku and covers a handful of labels per
+  // order, so it costs one query regardless of line count.
+  const labels = [
+    ...new Set(
+      raw
+        .map((t) => t.custom_label)
+        .filter((label): label is string => Boolean(label))
+    ),
+  ]
+
+  const imageBySku = new Map<string, string | null>()
+  if (labels.length > 0) {
+    const { data: products, error: productsError } = await supabase
+      .from("products")
+      .select("sku, image_url")
+      .in("sku", labels)
+
+    // A failed thumbnail lookup costs the expansion its pictures, not its
+    // contents, so it is not raised to the caller as an error.
+    if (!productsError) {
+      for (const product of products ?? []) {
+        imageBySku.set(product.sku, product.image_url)
+      }
+    }
+  }
+
+  const transactions = raw.map((t) => {
     const items: OrderPickedItem[] = t.order_items
       .map((item) => ({
         id: item.id,
@@ -572,6 +634,7 @@ export async function fetchOrderTransactionsWithItems(
         location_name: item.locations?.name ?? null,
         is_auto_generated: item.is_auto_generated,
         product_name: item.products?.name ?? null,
+        image_url: item.products?.image_url ?? null,
       }))
       .sort((a, b) => (a.sku_snapshot ?? "").localeCompare(b.sku_snapshot ?? ""))
 
@@ -588,6 +651,9 @@ export async function fetchOrderTransactionsWithItems(
       transaction_id_ebay: t.transaction_id_ebay,
       items,
       hasUnresolved: items.some((item) => item.product_id === null),
+      image_url: t.custom_label
+        ? (imageBySku.get(t.custom_label) ?? null)
+        : null,
     }
   })
 

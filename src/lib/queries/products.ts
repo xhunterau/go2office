@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Database } from "@/lib/supabase/database.types"
 import {
   escapeLike,
+  orLikePattern,
   positiveIntParam,
   textParam,
 } from "@/lib/queries/search-params"
@@ -166,4 +167,45 @@ export async function fetchProductList(
     count: count ?? 0,
     error: null,
   }
+}
+
+// A candidate for the order line picker.
+export type OrderLineProduct = Pick<
+  Database["public"]["Tables"]["products"]["Row"],
+  "id" | "sku" | "name" | "image_url" | "retail_price" | "is_kit" | "is_active"
+>
+
+const ORDER_LINE_SEARCH_LIMIT = 20
+
+// Products a hand-added order line may point at, matched on SKU or name.
+//
+// Neither kits nor inactive products are filtered out, unlike the kit component
+// picker. A kit is exactly what an order line usually sells -- it is the level
+// the platform lists -- and stock is still sold off after a product is
+// deactivated. Both are labelled in the list instead, since either one changes
+// what the saved line will expand into.
+//
+// retail_price rides along so the dialog can prefill the sale price. It is 0 for
+// most kits (556 of 640, docs/product-kit-pricing.md 11), which the caller has
+// to treat as "no price" rather than as free.
+export async function searchOrderLineProducts(
+  supabase: SupabaseClient<Database>,
+  keyword: string
+): Promise<{ products: OrderLineProduct[]; error: string | null }> {
+  let query = supabase
+    .from("products")
+    .select("id, sku, name, image_url, retail_price, is_kit, is_active")
+    .order("sku")
+    .limit(ORDER_LINE_SEARCH_LIMIT)
+
+  const term = keyword.trim()
+  if (term) {
+    const pattern = orLikePattern(term)
+    query = query.or(`sku.ilike.${pattern},name.ilike.${pattern}`)
+  }
+
+  const { data, error } = await query
+
+  if (error) return { products: [], error: error.message }
+  return { products: data ?? [], error: null }
 }

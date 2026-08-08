@@ -6,6 +6,10 @@ import { randomUUID } from "node:crypto"
 import type { Database } from "@/lib/supabase/database.types"
 import { createClient } from "@/lib/supabase/server"
 import {
+  searchOrderLineProducts,
+  type OrderLineProduct,
+} from "@/lib/queries/products"
+import {
   isForeignKeyViolation,
   isUniqueViolation,
   type ActionResult,
@@ -299,4 +303,20 @@ export async function deleteProduct(id: number): Promise<ActionResult> {
 
   revalidatePath(PATH)
   return { success: true }
+}
+
+// Backs the order line picker's search box. A Server Action rather than a route
+// handler for the same reason as searchKitCandidatesAction: it reuses the
+// server Supabase client and its auth cookie handling.
+export async function searchOrderLineProductsAction(
+  keyword: string
+): Promise<ActionResult<OrderLineProduct[]>> {
+  const supabase = await createClient()
+  const { products, error } = await searchOrderLineProducts(
+    supabase,
+    typeof keyword === "string" ? keyword.slice(0, 100) : ""
+  )
+
+  if (error) return { success: false, error }
+  return { success: true, data: products }
 }

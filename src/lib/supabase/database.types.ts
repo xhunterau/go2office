@@ -958,8 +958,9 @@ export type Database = {
       // dropdown built by iterating it comes out right.
       // 'labelled' is the British double-L spelling, matching Laravel's value;
       // 004 casts with lower() and no mapping, so it has to match exactly.
+      // `new` was dropped by 20260808120000: it was imported from the Laravel
+      // dropdown and never used by this business.
       order_status:
-        | "new"
         | "pending"
         | "unpaid"
         | "backorder"

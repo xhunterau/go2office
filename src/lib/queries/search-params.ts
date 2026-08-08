@@ -11,6 +11,14 @@ export function escapeLike(value: string): string {
   return value.replace(/[%_]/g, (match) => `\\${match}`)
 }
 
+// The same, for a pattern that goes inside an `or()` filter. Commas,
+// parentheses, quotes and backslashes are PostgREST's own filter grammar, so
+// they have to come out before the value is spliced into `sku.ilike.%x%,...`;
+// escapeLike alone leaves the request malformed rather than unmatched.
+export function orLikePattern(value: string): string {
+  return `%${escapeLike(value.replace(/[,()"\\]/g, ""))}%`
+}
+
 // A trimmed, non-empty string, or null. Repeated params (?a=1&a=2) take the
 // first value, which is what the filter bars produce when a control is reset
 // and set in the same navigation.

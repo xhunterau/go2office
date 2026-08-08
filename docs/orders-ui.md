@@ -136,22 +136,23 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 
 **类型**：Postgres 原生枚举 `public.order_status`，`orders.status` 列 `NOT NULL`、**无默认值**。TS 侧用 `Database["public"]["Enums"]["order_status"]`，`z.enum` 直接对齐。
 
-**10 个值，声明顺序即业务生命周期**（迁移 `20260804100000` 在原有 4 个基础上补齐了 Laravel 下拉的全部选项，详见 `docs/orders-domain-migration.md` §15）：
+**9 个值，声明顺序即业务生命周期**（迁移 `20260804100000` 在原有 4 个基础上补齐了 Laravel 下拉的全部选项，详见 `docs/orders-domain-migration.md` §15；`20260808120000` 又删掉了 `new`）：
 
 | pos | label | 语义 | 当前订单数 |
 |---|---|---|---|
-| 1 | `new` | 刚进来 | 0 |
-| 2 | `pending` | 待处理 | 0 |
-| 3 | `unpaid` | 未付款（阻塞） | 0 |
-| 4 | `backorder` | 缺货待补（阻塞） | 0 |
-| 5 | `processing` | 处理中 | 9 |
-| 6 | `picked` | 已拣货 | 0 |
-| 7 | `labelled` | 已打面单 | 0 |
-| 8 | `issued` | 已发出 | 1 |
-| 9 | `completed` | 已完成 | **202,778** |
-| 10 | `cancelled` | 已取消 | 527 |
+| 1 | `pending` | 待处理 | 0 |
+| 2 | `unpaid` | 未付款（阻塞） | 0 |
+| 3 | `backorder` | 缺货待补（阻塞） | 0 |
+| 4 | `processing` | 处理中 | 9 |
+| 5 | `picked` | 已拣货 | 0 |
+| 6 | `labelled` | 已打面单 | 0 |
+| 7 | `issued` | 已发出 | 1 |
+| 8 | `completed` | 已完成 | **202,778** |
+| 9 | `cancelled` | 已取消 | 527 |
 
-那 6 个 0 不代表用不上——它们是 Laravel 一直提供的选项，只是最终备份的那一刻没有订单停在上面。**上线后新订单会真正铺开在这 10 个状态上**，这也是 §5.2 把状态筛选器从配角改成主角的原因。
+那 5 个 0 不代表用不上——它们是 Laravel 一直提供的选项，只是最终备份的那一刻没有订单停在上面。**上线后新订单会真正铺开在这 9 个状态上**，这也是 §5.2 把状态筛选器从配角改成主角的原因。
+
+> **2026-08-08 删除 `new`（用户决定）**：迁移 `20260808120000` 换类型重建了 `public.order_status`。原本 `new` 是随 Laravel 下拉一并补进来的，业务上不存在"刚进来"这个态。三项前置核对：0 行在用；最终备份只产出 `COMPLETED`/`CANCELLED`/`PROCESSING`/`ISSUED`，故 `004` 的 `lower(源值)::enum` 不受影响；全库只有 `orders.status` 与 `order_status_counts` 视图引用该类型，无默认值、无函数、无策略谓词涉及。**Postgres 没有 `DROP VALUE`**，所以该迁移是"重命名旧类型 → 建新类型 → `ALTER COLUMN ... USING status::text::新类型` → 丢弃旧类型"，会全表重写 203,315 行并持 ACCESS EXCLUSIVE 锁——**执行时不能有订单写入**，且结尾必须重跑 `ANALYZE`（重写会作废 `20260808100000` 精心刷新的统计信息）。
 
 枚举遍历顺序就是生命周期顺序，所以下拉菜单直接按 `Database["public"]["Enums"]["order_status"]` 的声明序渲染即可，不要另建一套排序常量（两份顺序必然漂移）。
 
@@ -219,8 +220,17 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 枚举补到 10 个值之后（§4.2），状态不再是"偶尔用来捞异常单"的下拉项——`unpaid` 待催款、`backorder` 待补货、`picked` 待打单、`labelled` 待发出，每一个都是一条日常工作队列。所以状态入口放在**列表顶部的一排 tab**，而不是埋进筛选栏：
 
 ```
-[ All ]  [ Needs action ]  [ Unpaid ]  [ Backorder ]  [ Picked ]  [ Labelled ]  [ Completed ]  [ Cancelled ]
+[ All ]  [ Needs action ]  [ Processing ]  [ Labelled ]  [ Picked ]
 ```
+
+> **2026-08-08 落地时收窄（用户决定）**：原计划的 8 个 tab 减为 5 个。
+> - `Unpaid` / `On backorder` **并入 `Needs action`**——后者本就是 `NOT IN (completed, cancelled)`，这两个状态已经在里面，单独给 tab 等于同一批订单在一行里出现两次；
+> - **不要 `Completed` / `Cancelled` tab**：99.7% 的订单落在 completed，做成 tab 是给"不需要处理的东西"占掉主导航；两者仍可从筛选栏的 10 值下拉选到；
+> - **`Processing` 单独提出来**（Laravel 停机时卡住的 9 张就在这里，§4.2.1 其二）；
+> - **`Labelled` 排在 `Picked` 前面**，与枚举的生命周期顺序相反——这是按实际作业顺序排的，不是笔误，改动 `STATUS_TABS` 时不要"顺手修正"回去；
+- **`Needs action` 挪到最后一个**，并收窄口径（见下）。
+
+**`Needs action` 的口径**（`NEEDS_ACTION_EXCLUDED`，`src/lib/queries/orders.ts`）：排除 `completed` / `cancelled` / `pending` / `processing` / `picked` / `labelled`，即剩下 `unpaid` / `backorder` / `issued`。前两个是终态，后四个要么已在流转、要么已有自己的 tab——算进来会让同一批订单在同一行里出现两次。**新增枚举值默认落进 `Needs action`**，这是安全的方向：新队列会自己冒出来，而不是无声消失。
 
 - **`Needs action`** 是聚合项：`status NOT IN ('completed','cancelled')`。这是运营每天真正要盯的那一屏，也是唯一一个不随枚举增删而失效的入口。
 - tab 上带计数。**但计数必须走单独一次按 status 分组的聚合查询**，不是每个 tab 各发一次 count——`orders_status_idx` 在这上面是一次 Index Only Scan（实测 65 ms、`Heap Fetches: 0`），比 8 次分别 count 便宜得多。
@@ -368,6 +378,26 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 2. 修改这两个字段前用全局 `useConfirm`（规则 9）提示会重建拣货明细并可能丢失手工调整。
 
 同理，详情页 `⋯` 菜单里的 `Rebuild picked items`（调 `rebuild_order_items_for_order(order_id)`）是**唯一支持的"把历史订单按当前 BOM 重算"的手段**，也是破坏性的——它会把当年实际发出去的明细替换成今天的 BOM。文案要写死："This replaces what was actually shipped with today's kit contents."
+
+### 6.4.1 新增与删除交易行（2026-08-08 补）
+
+字段编辑之外，详情页还提供交易行的**新增**（`Transactions (N)` 标题旁 `Add line`）与**删除**（行尾 `⋯` 菜单，与 `/orders`、`/inventory` 的行操作同形）。
+
+**新增：拣货明细不用人填。** `order_transactions_rebuild_items_insert` 是**无条件** AFTER INSERT，插入语句一落地，`rebuild_order_items()` 就按 `custom_label` 生成明细——普通商品 1 行、套装按 BOM 展开、SKU 匹配不到则生成 1 行 `product_id IS NULL` 的占位行。所以新增对话框是**单表单单保存键**，不必像编辑那样把 `custom_label` / `quantity` 拆出去：insert 时没有"手工调整"可供丢失，编辑时才有。
+
+**新增只能选系统里已有的商品**（用户决定，2026-08-08）。SKU 输入框换成商品选择器（搜 SKU / 名称，套装与停用商品都在候选里，各自带徽章），选中后 `custom_label` = 该商品 SKU、`item_title` = `name`、`Unit price` = `retail_price`，三个字段仍可改。**编辑对话框的 SKU 自由文本保持不变**——那是修历史遗留的 313 行未解析明细的唯一入口，与"手工新增一条订单行"是两件事。
+
+校验分两层：zod 只保证选择器非空，**真正的把关在 `createOrderTransaction` 里按 `sku` 回查 `products`**，查不到直接报错。这一层不能省——数据库对未知 SKU 不会有任何抱怨，插入照样成功，只是多一行未解析明细。
+
+**但"SKU 存在"不等于"能拣出东西"**：空 BOM 的套装（24 个）同样只展开出一行 `product_id IS NULL` 的占位行。所以 `createOrderTransaction` 插入后仍要**回读一次该交易行的 `order_items`**，用 toast 区分"生成了 N 条明细"与"什么都拣不出来，去看看这个套装的内容"。
+
+**零售价为 0 的套装不预填价格**（用户决定）：640 个套装里 556 个 `retail_price` 是 **0 而非 NULL**（`docs/product-kit-pricing.md` §11），照填等于在真实订单上无声生成一条 $0 的行。这类商品选中后 Unit price **留空**（表单值为 `NaN`），由 zod 逼用户填，并在字段下方提示 `This product has no retail price set`。
+
+**新增表单只开放四个字段**（商品 / 标题 / 数量 / 单价）。`item_number`、`sales_record_number`、`order_id_ebay`、`transaction_id_ebay`、`postage_service` 记录的是"平台报告了什么"，手工补的行根本没有这些标识；开放它们等于允许在将来 eBay/Shopify 同步要拿来对账的列里填入编造值。`sale_date` / `paid_on_date` 是 NOT NULL 无默认值，按用户决定（2026-08-08）一律写 `now()`，不做输入项。
+
+**删除：靠 CASCADE，不做二次清理。** `order_items.transaction_id` 是 `ON DELETE CASCADE`，删交易行即删其下全部拣货明细，不会留下孤儿。目前 `order_items` 上**没有**任何库存联动（发货→库存流水在 §13），所以删除只改这张订单的金额口径。确认文案（规则 9）必须报出连带删除的明细条数——套装行收起时，用户看不到自己在删几行。
+
+删到一条不剩是**允许**的：迁移进来的 25 张订单本来就是零交易行，`order_totals` 对它们返回 0。
 
 ### 6.5 未解析明细的标记
 
@@ -574,6 +604,36 @@ ANALYZE public.order_items;
 - `src/app/(dashboard)/orders/page.tsx`、`customers/page.tsx`（替换占位）
 - `src/lib/supabase/database.types.ts`：四表与 `order_totals` **已就位**，本轮需补 `order_status_counts` 的 `Row`（§8.1）。§8.2 的 `order_list` 视图仍不建
 
+### 10.1 实际落地与本节的四处偏差（2026-08-08 UI 轮）
+
+上面的清单写于编码前，以下四处按规则 5 在实现时收敛，**以实际代码为准**：
+
+| 计划 | 实际 | 原因 |
+|---|---|---|
+| `orders/_components/orders-pagination` + `customers/_components/customers-pagination` | 一个 `src/components/estimated-pagination.tsx`，带 `noun` 参数 | 两个列表的估算分页逻辑逐行相同（"about N"、无跳末页、短页判定末页），差别只有空态那个名词 |
+| `customers/[id]/_components/customer-orders-table` | 直接用共享的 `components/orders/orders-table`（`showCustomer={false}`） | 本节"共享"那段的原意，不需要再包一层 |
+| `customers/_components/customer-form-dialog` | `src/components/customers/customer-form-dialog.tsx` | 列表页与详情页都要用，与订单表格同理 |
+| `queries/customers.ts` 导出 `fetchCustomerOrders`（§9.1） | 未实现，改为 `fetchOrderList(supabase, filters, customerId)` | 与 `/orders` 是同一个查询与同一套筛选解析，另写一份必然漂移 |
+
+另外新增两个计划外的文件与两个 Server Action：
+
+- `src/lib/format.ts`：`formatMoney` / `formatDate`。订单域金额恒为 AUD（与商品零售价不同，那里必须按行取 currency）
+- `src/lib/orders/status.ts`：状态/平台的 label 与徽章配色、tab 定义。其中 `order_status.backorder` 的 label 是 **`On backorder`**，与 `sales_platform.backorder` 的 `Backorder` 区分（§4.2.2）
+- `loadOrderTransactions(orderId)`（`actions/order.ts`）：列表页行展开按需取交易行，形状同 `loadProductHistory`
+- `loadCustomer(id)`（`actions/customer.ts`）：**编辑客户前必须整行读取**。`CustomerListRow` 只带 8 列而 `updateCustomer` 写 13 列，用列表行直接喂表单会把 phone / company / 四行地址静默写成 NULL
+
+**2026-08-08 追加（交易行增删，§6.4.1）**
+
+- `_components/transaction-create-dialog.tsx`（新增行）与 `_components/transaction-fields.tsx`（四个字段的共用实现）。后者是按规则 5 抽出来的：数字输入的空值处理（空串 → `NaN` 而非 `0`，好让 zod 报错而不是静默存 0）本来在编辑对话框里就写了两遍
+- `createOrderTransaction` / `deleteOrderTransaction`（`actions/order.ts`）
+- 交易行的行尾操作由铅笔按钮改为 `⋯` 菜单（Edit / Delete），与列表页一致
+- 拣货明细展开区加了商品缩略图列，走 `order_items → products` 的真实外键内嵌（不同于交易行那张图——那里 `custom_label = sku` 不是外键，只能额外查一次）
+- `src/components/products/product-picker.tsx`：异步商品选择器，从 `product-kit-item-dialog` 里那份提取出来，套装组件选择器与订单行选择器共用。里面那套「防抖 + 用关键词标记结果是否陈旧 + 单独记住已选项（否则搜索词一变它就从候选里消失、按钮上的名字跟着没了）」照抄一份必然漂移。**`search` 参数必须由调用方 `useCallback` 稳定**，否则父表单每敲一个字都会重启防抖
+- `searchOrderLineProducts`（`queries/products.ts`）+ `searchOrderLineProductsAction`（`actions/product.ts`）：候选集**不排除套装、也不排除停用商品**——套装正是订单行通常卖的那一层，停用商品也仍在清尾货；两者在列表里打徽章而不是滤掉
+- `orLikePattern`（`queries/search-params.ts`）：原本是 `product-kit-items.ts` 里的私有函数，两处搜索共用后上提。它比 `escapeLike` 多剥掉逗号/括号/引号/反斜杠——这些是 PostgREST `or()` 自己的语法字符，不剥会让请求**格式错误**，而不是查不到
+
+`order-row-detail`（列表页展开）与 `order-transactions-table`（详情页展开）是两个组件、两种深度：前者只到交易行 + `Unresolved` 徽章，后者才展开到拣货明细。合并会让列表页为收起状态下的内容多取一层 `order_items`。
+
 ## 11. 验证计划
 
 1. **索引真的被用上**：对搜索查询跑 `EXPLAIN ANALYZE`，确认走 `Bitmap Index Scan` 而非 `Seq Scan`。这是本轮唯一"看起来能用、实际全表扫"的地方——20 万行上跑得动，但每次都是几百毫秒起（无索引时 `customers.full_name ILIKE '%smith%'` 实测 96 ms Seq Scan）。
@@ -588,7 +648,23 @@ ANALYZE public.order_items;
 10. **索引体积**：建完索引跑 `pg_relation_size`，把 7 个 GIN 索引的实际大小记回 §8.1。
 11. **规则 12**：所有 Dialog 桌面端 + 移动端各验一次。
 12. **状态 tab 计数**：确认 `order_status_counts` 能被 `authenticated` 查到（RLS 经 `security_invoker` 生效），且 8 个 tab 的数字只发一次请求。
-13. **legacy 运送方式保存后不丢**（§4.3 决策 B）：挑一张 `legacy_shipping_method` 非空的订单，改成新枚举值后确认该列**仍保有原值**，且列表/详情显示的是新值。
+13. **交易行增删**（§6.4.1）：只在测试订单上做。选一个普通商品（应生成 1 条明细，标题与零售价被带入）、一个有 BOM 的套装（应展开多条）、一个 `retail_price = 0` 的套装（Unit price 应留空且不让提交）；删一条套装行，确认其下明细随 CASCADE 一并消失、`Totals` 与交易行计数同步变化。另外确认套装组件选择器（`/products/[id]` 的 Add kit component）改用共享 `ProductPicker` 后行为未变。
+14. **legacy 运送方式保存后不丢**（§4.3 决策 B）：挑一张 `legacy_shipping_method` 非空的订单，改成新枚举值后确认该列**仍保有原值**，且列表/详情显示的是新值。
+
+### 11.1 各场景的实际样本（2026-08-08 从远端取，供逐项验证）
+
+| 场景 | 记录 | 对应验证项 |
+|---|---|---|
+| 含未解析明细 | `/orders/2383`（`1800094F`） | 5、父行徽章（决策 D） |
+| 无交易行 | `/orders/18639`（`180048CF`） | 7 |
+| 含负数售价（退款） | `/orders/31481`（`19007AF9`） | 6 |
+| legacy 承运商（`Sendle`） | `/orders/63393`（`2000F7A1`） | 13 |
+| 停机时卡住的 `processing` | `/orders/205913`（`26032459`） | 3（改 comments 不应重建） |
+| 一行拣出多个 SKU（套装） | `/orders/2006`（`180007D6`） | 6.1 两层语义 |
+| 订单最多的客户（141 张） | `/customers/99686` | 客户详情页分页 |
+| 订单最多的 SKU | `GB00011SF`（`product_id = 11`，7,100 张） | 9（SKU 反查） |
+
+**验证项 4（`rebuild_order_items_for_order`）没有安全的样本**：详情页 `⋯ → Rebuild picked items` 是 `DELETE` + `INSERT`，历史明细不可再生。只能在新建的测试订单上做，**禁止对上表任何一条执行**。
 
 ## 12. 风险与注意事项
 

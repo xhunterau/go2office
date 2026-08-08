@@ -75,3 +75,40 @@ export const transactionUpdateSchema = z.object({
 })
 
 export type TransactionUpdateInput = z.infer<typeof transactionUpdateSchema>
+
+// A hand-added transaction line.
+//
+// custom_label is required here, unlike on an edit: a line added by hand must
+// point at a product that exists (user decision, 2026-08-08), and the dialog
+// only lets one be chosen from the picker. The edit form keeps its free-text
+// SKU because that is the only way to repair the 313 migrated lines whose label
+// resolves to nothing -- repairing history and inventing new history are
+// different jobs. The server re-checks the SKU; this only keeps an empty picker
+// from being submitted.
+//
+// Otherwise the same four fields as an edit, and nothing else on purpose.
+// item_number,
+// sales_record_number, order_id_ebay, transaction_id_ebay and postage_service
+// are what the marketplace reported about a sale it made; a line typed in here
+// was not sold by the platform, so letting someone fill them in would put
+// invented identifiers in the columns a future eBay/Shopify sync reconciles
+// against (docs/orders-ui.md 6.4).
+//
+// sale_date / paid_on_date are NOT NULL with no default, and are set to now()
+// server-side rather than being asked for (user decision, 2026-08-08).
+// A refinement rather than a stricter custom_label type, so this stays
+// assignable to the same react-hook-form Control as an edit and both dialogs can
+// share the field components.
+export const transactionCreateSchema = transactionUpdateSchema.superRefine(
+  (values, ctx) => {
+    if (!values.custom_label?.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["custom_label"],
+        message: "Select a product",
+      })
+    }
+  }
+)
+
+export type TransactionCreateInput = z.infer<typeof transactionCreateSchema>

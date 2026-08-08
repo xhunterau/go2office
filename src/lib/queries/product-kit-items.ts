@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/lib/supabase/database.types"
+import { orLikePattern } from "@/lib/queries/search-params"
 
 // product_kit_items has two foreign keys to products, so every embed must name
 // the constraint it travels — PostgREST cannot guess which one is meant.
@@ -54,14 +55,6 @@ export type KitCandidate = Pick<
   Database["public"]["Tables"]["products"]["Row"],
   "id" | "sku" | "name" | "image_url"
 >
-
-// Prepare user input for an `ilike` pattern inside an `or()` filter: drop the
-// characters that would break PostgREST's filter grammar (commas, parentheses,
-// quotes, backslashes) and escape the LIKE wildcards so they match literally.
-function toSearchPattern(value: string): string {
-  const cleaned = value.replace(/[,()"\\]/g, "")
-  return `%${cleaned.replace(/[%_]/g, (match) => `\\${match}`)}%`
-}
 
 // Components of one kit, ordered by component id (the legacy table carries no
 // ordering column, so there is no user-defined sort to honour).
@@ -137,7 +130,7 @@ export async function searchKitCandidates(
 
   const term = keyword.trim()
   if (term) {
-    const pattern = toSearchPattern(term)
+    const pattern = orLikePattern(term)
     query = query.or(`sku.ilike.${pattern},name.ilike.${pattern}`)
   }
 
