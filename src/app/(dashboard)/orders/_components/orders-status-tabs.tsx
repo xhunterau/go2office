@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button"
 const numberFormatter = new Intl.NumberFormat("en-AU")
 
 // The status row is the page's main structure rather than one more dropdown:
-// unpaid is a chasing queue, backorder a purchasing queue, picked a packing
-// queue (docs/orders-ui.md 5.2). The full ten-value dropdown stays in the
+// unpaid is a chasing queue, backorder a purchasing queue, labelled a dispatch
+// queue (docs/orders-ui.md 5.2). The full eight-value dropdown stays in the
 // filter bar for the statuses without a tab.
 export function OrdersStatusTabs({
   counts,
@@ -62,9 +62,9 @@ export function OrdersStatusTabs({
             )}
           >
             {tab.label}
-            {/* Six of the ten statuses are empty in the migrated data. The tabs
-                still render at zero: hiding them would mean the queue becomes
-                invisible on the day it first has something in it. */}
+            {/* Four of the eight statuses are empty in the migrated data. The
+                tabs still render at zero: hiding them would mean the queue
+                becomes invisible on the day it first has something in it. */}
             {count !== null && (
               <Badge variant={active ? "secondary" : "inactive"}>
                 {numberFormatter.format(count)}

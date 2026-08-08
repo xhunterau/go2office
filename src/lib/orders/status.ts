@@ -15,7 +15,6 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   // things (docs/orders-ui.md 4.2.2). The platform label keeps the plain form.
   backorder: "On backorder",
   processing: "Processing",
-  picked: "Picked",
   labelled: "Labelled",
   issued: "Issued",
   completed: "Completed",
@@ -38,7 +37,6 @@ export const ORDER_STATUS_VARIANTS: Record<OrderStatus, BadgeVariant> = {
   unpaid: "warning",
   backorder: "warning",
   processing: "info",
-  picked: "info",
   labelled: "info",
   issued: "info",
   completed: "inactive",
@@ -56,7 +54,7 @@ export const SALES_PLATFORM_LABELS: Record<SalesPlatform, string> = {
 }
 
 // The status tabs. Only three statuses get one; every other queue is reached
-// through Needs action or the filter bar's full ten-value dropdown, which is
+// through Needs action or the filter bar's full eight-value dropdown, which is
 // the only place completed and cancelled can be selected (docs/orders-ui.md
 // 5.2).
 //
@@ -67,8 +65,8 @@ export const SALES_PLATFORM_LABELS: Record<SalesPlatform, string> = {
 // when none of them is what you are after.
 export const STATUS_TABS: { value: StatusTab; label: string }[] = [
   { value: null, label: "All" },
+  { value: "pending", label: ORDER_STATUS_LABELS.pending },
   { value: "processing", label: ORDER_STATUS_LABELS.processing },
   { value: "labelled", label: ORDER_STATUS_LABELS.labelled },
-  { value: "picked", label: ORDER_STATUS_LABELS.picked },
   { value: NEEDS_ACTION, label: "Needs action" },
 ]

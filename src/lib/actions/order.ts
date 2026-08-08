@@ -48,9 +48,13 @@ function messageFor(error: { code?: string; message?: string }): string {
 //
 // Fetched on demand rather than joined into fetchOrderList: 20 orders expand to
 // roughly 25 transactions and 30 picked items, and paying for that on every
-// page change to show what is collapsed by default is the same mistake as
-// joining order_totals (docs/orders-ui.md 3.3). Same shape as the inventory
+// page change to show what is collapsed by default is work spent on something
+// nobody asked to see (docs/orders-ui.md 3.3). Same shape as the inventory
 // list's loadProductHistory.
+//
+// Not to be confused with the order_metrics_summary embed in fetchOrderList,
+// which IS joined per page: that is one row per order on a primary key, not a
+// second table's worth of lines.
 export async function loadOrderTransactions(
   orderId: number
 ): Promise<ActionResult<OrderTransaction[]>> {
@@ -287,7 +291,7 @@ export async function updateOrderTransaction(
 // only changes what the order says was sold.
 //
 // Leaving an order with no lines at all is allowed: 25 migrated orders are
-// already in that state, and order_totals reports 0 for them.
+// already in that state, and order_metrics_summary reports 0 for them.
 export async function deleteOrderTransaction(
   transactionId: number,
   orderId: number

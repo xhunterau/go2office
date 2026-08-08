@@ -17,16 +17,28 @@
 --     public.locations is current (order_items resolves pick_location by name).
 --
 -- !! DANGER -- READ BEFORE RUNNING !!
--- Section 3 disables the two order_items rebuild triggers and section 5
--- re-enables them. Do not run the sections separately and do not stop in
--- between. With the triggers live, inserting into order_transactions
+-- Section 3 disables the two order_items rebuild triggers and re-enables them at
+-- the end of the same transaction. Do not run the sections separately and do not
+-- stop in between. With the triggers live, inserting into order_transactions
 -- regenerates every order_items row from today's BOM -- which silently
 -- overwrites the 250687 migrated rows, discards the 3026 lines that cannot be
 -- reproduced at all, and wipes all 28893 recorded pick locations. It does not
 -- raise an error; the numbers just quietly become wrong. Diagnostic 6 at the end
 -- of this file is the check for exactly this.
 --
--- This script is deliberately split into four transactions rather than one.
+-- Sections 2 and 3 additionally disable the eight order_metrics_summary triggers
+-- (migration 20260808170000), and section 5 rebuilds that table from scratch
+-- afterwards. Skipping section 5 does not raise either: the order screens simply
+-- keep reporting pre-import totals, weights and sizes. Diagnostic 8a checks it.
+--
+-- Section 2 also disables the two orders_normalize_tracking_* triggers
+-- (migration 20260808210000) and calls the same function inline. Both halves of
+-- that swap are load-bearing: dropping the DISABLE makes the trigger fire once
+-- per row over 203315 rows, and dropping the inline call imports raw scanner
+-- output -- 27709 orders whose tracking number is a full GS1-128 barcode string
+-- that no carrier site accepts. Diagnostic 9 checks it.
+--
+-- This script is deliberately split into five transactions rather than one.
 -- ~900k rows in a single transaction on the pooler connection risks a timeout
 -- that rolls back an hour of work. The cost of splitting is that an interruption
 -- leaves a partially-populated schema: re-run from the top, the upserts make
@@ -175,7 +187,8 @@ COMMIT;
 --   payment_method -- 88100 blanks, `PayPal`/`paypal` both present, and ~15 rows
 --                     holding a shipping charge ("AU $8.95"). Retired by decision.
 --   total_sale     -- 0 on 61329 rows because the 2020 XOFFICE import never
---                     brought totals across. Now public.order_totals.
+--                     brought totals across. Now
+--                     public.order_metrics_summary.goods_total.
 --   is_atl         -- 0 on all 203315 rows.
 --   est_profit     -- 0 on all 203315 rows.
 --   logs           -- 1826492 lines of audit text. Retired by decision.
@@ -189,10 +202,14 @@ COMMIT;
 -- A COALESCE to some default would file the unknown status under a wrong one and
 -- nobody would find out.
 --
--- public.order_status covers all TEN values the Laravel dropdown offers, not
--- just the four this backup happens to contain (migration 20260804100000 added
--- new, pending, unpaid, backorder, picked, labelled). So the cast should now
--- resolve anything the final sync brings across.
+-- public.order_status carries EIGHT values: migration 20260804100000 added the
+-- whole Laravel dropdown (new, pending, unpaid, backorder, picked, labelled) on
+-- top of the four this backup contains, then 20260808120000 dropped `new` and
+-- 20260808130000 dropped `picked` -- both unused by this business, both zero
+-- rows, and neither appears in go2_orders.order_status (COMPLETED, CANCELLED,
+-- PROCESSING, ISSUED only). So the cast still resolves everything the final
+-- sync brings across; a backup that suddenly produced NEW or PICKED would abort
+-- this transaction, which is the intended behaviour.
 --
 -- Because the cast is `lower(...)` with no mapping, every enum label must be the
 -- exact lowercase of its Laravel spelling. 'labelled' is British double-L,
@@ -213,6 +230,24 @@ BEGIN;
 -- 2026-08-02. SET LOCAL lifts the cap for this transaction only, and is
 -- reverted automatically at COMMIT.
 SET LOCAL statement_timeout = 0;
+
+-- The order_metrics_summary triggers (migration 20260808170000) must be off for
+-- the same reason as the rebuild triggers in section 3. They are statement
+-- level, so leaving them on is not 203315 firings -- it is one firing holding a
+-- transition table of 203315 rows, handed to recompute_order_metrics as a single
+-- bigint[]. Section 5 rebuilds the whole summary table afterwards, which is both
+-- correct and far cheaper.
+ALTER TABLE public.orders DISABLE TRIGGER oms_orders_insert;
+ALTER TABLE public.orders DISABLE TRIGGER oms_orders_update;
+
+-- The orders_normalize_tracking_* triggers (migration 20260808210000) are row
+-- level, so unlike the summary triggers above they really would fire 203315
+-- times. The SELECT below calls public.normalize_tracking_number() directly
+-- instead, which produces the identical value in one pass -- so there is no
+-- separate backfill to remember, and the ON CONFLICT branch carries the
+-- normalised value through EXCLUDED too.
+ALTER TABLE public.orders DISABLE TRIGGER orders_normalize_tracking_insert;
+ALTER TABLE public.orders DISABLE TRIGGER orders_normalize_tracking_update;
 
 WITH keyed AS (
   SELECT
@@ -254,7 +289,10 @@ SELECT
     FROM public.go2_transactions AS t
     WHERE t.order_id = o.id
   ),
-  o.tracking_number,
+  -- Raw Laravel values are whatever the barcode gun produced. Normalising here
+  -- rather than letting the trigger do it is the whole point of the DISABLE
+  -- above; see migration 20260808210000 for what the function strips.
+  public.normalize_tracking_number(o.tracking_number),
   o.web_order_id,
   o.comments,
   (o.posted_on_date AT TIME ZONE 'Australia/Sydney'),
@@ -317,6 +355,11 @@ ON CONFLICT (id) DO UPDATE SET
   posted_on_date = EXCLUDED.posted_on_date,
   created_at = EXCLUDED.created_at;
 
+ALTER TABLE public.orders ENABLE TRIGGER oms_orders_insert;
+ALTER TABLE public.orders ENABLE TRIGGER oms_orders_update;
+ALTER TABLE public.orders ENABLE TRIGGER orders_normalize_tracking_insert;
+ALTER TABLE public.orders ENABLE TRIGGER orders_normalize_tracking_update;
+
 COMMIT;
 
 -- ===========================================================================
@@ -342,6 +385,15 @@ ALTER TABLE public.order_transactions
   DISABLE TRIGGER order_transactions_rebuild_items_insert;
 ALTER TABLE public.order_transactions
   DISABLE TRIGGER order_transactions_rebuild_items_update;
+
+-- The six order_metrics_summary triggers on these two tables, off for the same
+-- reason (see section 2's note). Section 5 rebuilds the summary afterwards.
+ALTER TABLE public.order_transactions DISABLE TRIGGER oms_transactions_insert;
+ALTER TABLE public.order_transactions DISABLE TRIGGER oms_transactions_update;
+ALTER TABLE public.order_transactions DISABLE TRIGGER oms_transactions_delete;
+ALTER TABLE public.order_items        DISABLE TRIGGER oms_items_insert;
+ALTER TABLE public.order_items        DISABLE TRIGGER oms_items_update;
+ALTER TABLE public.order_items        DISABLE TRIGGER oms_items_delete;
 
 -- 3a. order_transactions (source: go2_transactions)
 --
@@ -444,6 +496,13 @@ ALTER TABLE public.order_transactions
 ALTER TABLE public.order_transactions
   ENABLE TRIGGER order_transactions_rebuild_items_update;
 
+ALTER TABLE public.order_transactions ENABLE TRIGGER oms_transactions_insert;
+ALTER TABLE public.order_transactions ENABLE TRIGGER oms_transactions_update;
+ALTER TABLE public.order_transactions ENABLE TRIGGER oms_transactions_delete;
+ALTER TABLE public.order_items        ENABLE TRIGGER oms_items_insert;
+ALTER TABLE public.order_items        ENABLE TRIGGER oms_items_update;
+ALTER TABLE public.order_items        ENABLE TRIGGER oms_items_delete;
+
 COMMIT;
 
 -- ===========================================================================
@@ -466,6 +525,26 @@ SELECT setval(pg_get_serial_sequence('public.customers', 'id'),          COALESC
 SELECT setval(pg_get_serial_sequence('public.orders', 'id'),             COALESCE((SELECT MAX(id) FROM public.orders), 0) + 1, false);
 SELECT setval(pg_get_serial_sequence('public.order_transactions', 'id'), COALESCE((SELECT MAX(id) FROM public.order_transactions), 0) + 1, false);
 SELECT setval(pg_get_serial_sequence('public.order_items', 'id'),        COALESCE((SELECT MAX(id) FROM public.order_items), 0) + 1, false);
+
+COMMIT;
+
+-- ===========================================================================
+-- 5. Rebuild order_metrics_summary
+-- ===========================================================================
+-- Sections 2 and 3 ran with the summary triggers disabled, so every metric in
+-- public.order_metrics_summary is now stale or missing. This is not optional
+-- cleanup: skipping it leaves the order screens reporting the totals, weights
+-- and sizes from before the import, with nothing to indicate they are stale.
+--
+-- A full pass rather than a targeted one -- the import touches every order, and
+-- recompute_order_metrics(NULL) also lifts its own statement_timeout. Measured
+-- at 31s over 203315 orders on 2026-08-08.
+
+BEGIN;
+
+SET LOCAL statement_timeout = 0;
+
+SELECT public.recompute_order_metrics(NULL);
 
 COMMIT;
 
@@ -552,13 +631,18 @@ COMMIT;
 --    drift, the source has started carrying real precision below the cent and
 --    the column types need revisiting.
 --
+--    Note tracking_number is NOT compared raw: section 2 normalises it, so 27686
+--    rows legitimately differ from the source. The function has to be applied to
+--    the source side for the comparison to mean anything. Comparing raw here
+--    would report a five-figure mismatch count on a correct import.
+--
 -- SELECT count(*) AS order_mismatches
 -- FROM public.go2_orders o
 -- JOIN public.orders n ON n.id = o.id
 -- WHERE n.invoice_number IS DISTINCT FROM o.invoice_number
 --    OR n.status::text IS DISTINCT FROM lower(o.order_status)
 --    OR n.platform::text IS DISTINCT FROM lower(o.platform)
---    OR n.tracking_number IS DISTINCT FROM o.tracking_number
+--    OR n.tracking_number IS DISTINCT FROM public.normalize_tracking_number(o.tracking_number)
 --    OR n.web_order_id IS DISTINCT FROM o.web_order_id
 --    OR n.postage_and_handling IS DISTINCT FROM
 --       (SELECT COALESCE(sum(t.postage_and_handling), 0) FROM public.go2_transactions t WHERE t.order_id = o.id);
@@ -600,13 +684,51 @@ COMMIT;
 --        (SELECT count(*) FROM public.orders) AS orders,
 --        (SELECT count(*) FROM public.order_transactions) AS transactions,
 --        (SELECT count(*) FROM public.order_items) AS items,
---        (SELECT sum(order_total) FROM public.order_totals) AS gross_sales;
+--        (SELECT sum(order_total) FROM public.order_metrics_summary) AS gross_sales;
+--
+-- 8a. !! The summary check !! Section 5 must have rebuilt every row (expected:
+--     one summary row per order, and no row computed before the import ran).
+--     A shortfall or an old computed_at means section 5 was skipped: the order
+--     screens are showing pre-import numbers and nothing on them says so.
+--
+-- SELECT (SELECT count(*) FROM public.orders) AS orders,
+--        (SELECT count(*) FROM public.order_metrics_summary) AS summary_rows,
+--        (SELECT min(computed_at) FROM public.order_metrics_summary) AS oldest_computed_at;
 --
 -- 9. Status distribution. As of 2026-08-02 the backup carries only four of the
---    ten values (completed 202778, cancelled 527, processing 9, issued 1); the
---    other six exist because the Laravel dropdown offers them, not because any
---    order was sitting in one. A final sync that brings across new, pending,
---    unpaid, backorder, picked or labelled is expected and fine -- this query
---    just makes it visible rather than surprising:
+--    eight values (completed 202778, cancelled 527, processing 9, issued 1); the
+--    other four exist because the Laravel dropdown offers them, not because any
+--    order was sitting in one. A final sync that brings across pending, unpaid,
+--    backorder or labelled is expected and fine -- this query just makes it
+--    visible rather than surprising:
 --
 -- SELECT status, count(*) FROM public.orders GROUP BY 1 ORDER BY 2 DESC;
+--
+-- 10. !! The tracking check !! Every tracking number must already be at the
+--     function's fixed point (expected: 0). Anything above zero means section 2
+--     ran without the inline normalize_tracking_number() call -- the triggers
+--     were disabled, so nothing put it back. The import does not fail; the
+--     tracking column just fills up with 41-to-74 character scanner output that
+--     no carrier site accepts and no one can read off the order screen.
+--
+--     Note this asks for idempotency, NOT "no barcode envelopes remain". 353
+--     rows keep their envelope legitimately -- the function has no cut for their
+--     article format and returns them unchanged rather than guessing -- so they
+--     are at their fixed point and pass. A `~ '01[0-9]{14}91'` test would flag
+--     those 353 forever and train everyone to ignore the check.
+--
+-- SELECT count(*) AS unnormalised
+-- FROM public.orders
+-- WHERE tracking_number IS DISTINCT FROM public.normalize_tracking_number(tracking_number);
+--
+--     The uncut rows themselves (measured 2026-08-08: 591 longer than 25 chars,
+--     of which 362 are Parcel_Post barcodes with an unestablished article format
+--     and 132 are Letter numbers scanned twice). Known and accepted, not a
+--     failure -- see docs/order-tracking-number.md section 4. A jump here means
+--     a new label format appeared and the function needs a branch for it:
+--
+-- SELECT coalesce(shipping_method::text, legacy_shipping_method, '(none)') AS method,
+--        count(*) AS uncut_rows
+-- FROM public.orders
+-- WHERE length(tracking_number) > 25
+-- GROUP BY 1 ORDER BY 2 DESC;

@@ -7,7 +7,7 @@ import { toast } from "sonner"
 
 import type { OrderListRow, OrderTransaction } from "@/lib/queries/orders"
 import { loadOrderTransactions } from "@/lib/actions/order"
-import { formatDate, formatMoney } from "@/lib/format"
+import { formatDate, formatMoney, formatWeightKg } from "@/lib/format"
 import { displayShippingMethod } from "@/lib/orders/shipping-method"
 import {
   ORDER_STATUS_LABELS,
@@ -54,9 +54,9 @@ export function OrdersTable({
   // Scoped to the expanded row, which is the only place it can be shown.
   const [linesError, setLinesError] = React.useState<string | null>(null)
 
-  // chevron + Invoice + Date + [Customer] + Platform + Status + Items + Total
-  // + Shipping + Dispatched + actions.
-  const columnCount = showCustomer ? 11 : 10
+  // chevron + Invoice + Date + [Customer] + Platform + Status + Items + Weight
+  // + Total + Shipping + Dispatched + actions.
+  const columnCount = showCustomer ? 12 : 11
 
   const loadLines = React.useCallback(async (orderId: number) => {
     setLoadingId(orderId)
@@ -104,6 +104,9 @@ export function OrdersTable({
             <TableHead>Platform</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Items</TableHead>
+            {/* Chargeable, not actual: it is what the carrier bills, and it is
+                the number that decides which satchel this order fits. */}
+            <TableHead className="text-right">Weight</TableHead>
             <TableHead className="text-right">Total</TableHead>
             <TableHead>Shipping</TableHead>
             <TableHead>Dispatched</TableHead>
@@ -182,13 +185,34 @@ export function OrdersTable({
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {row.transaction_count}
+                      {row.metrics.transaction_count}
                     </TableCell>
-                    {/* Not sortable, by design: ordering by this would mean
-                        aggregating all 250413 transaction rows on every page
-                        change (docs/orders-ui.md 3.3). */}
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <span
+                        className={cn(
+                          row.metrics.has_estimated_dimensions &&
+                            "underline decoration-dotted underline-offset-2"
+                        )}
+                        title={
+                          row.metrics.has_estimated_dimensions
+                            ? "Estimated: at least one product has no recorded size"
+                            : undefined
+                        }
+                      >
+                        {formatWeightKg(row.metrics.chargeable_weight_kg)}
+                      </span>
+                    </TableCell>
+                    {/* Not sortable, and settled: sorting by amount was
+                        considered when order_metrics_summary replaced the
+                        order_totals view and declined on 2026-08-08. The old
+                        reason (aggregating 250413 rows per page) is gone, but
+                        PostgREST cannot order a parent row set by an embedded
+                        resource's column, so it would mean driving this query
+                        from the summary table and rewriting every filter.
+                        See docs/order-metrics.md 9 -- this is a closed decision,
+                        not a to-do. */}
                     <TableCell className="text-right tabular-nums">
-                      {formatMoney(row.order_total)}
+                      {formatMoney(row.metrics.order_total)}
                     </TableCell>
                     <TableCell
                       className={cn(

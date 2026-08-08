@@ -17,6 +17,36 @@ export function formatMoney(value: number | null): string {
   return moneyFormatter.format(value)
 }
 
+// Weights are kilograms throughout (products.weight, and everything
+// order_metrics_summary derives from it). Three decimals because the catalogue
+// is mostly small items: 0.03 kg rounds to nothing at one decimal place.
+const weightFormatter = new Intl.NumberFormat("en-AU", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 3,
+})
+
+export function formatWeightKg(value: number | null): string {
+  if (value === null) return "—"
+  return `${weightFormatter.format(value)} kg`
+}
+
+// Dimensions are millimetres throughout, and are whole numbers in practice.
+const dimensionFormatter = new Intl.NumberFormat("en-AU", {
+  maximumFractionDigits: 1,
+})
+
+// One L x W x H string. Returns null when any edge is missing, because a
+// partial box is not a measurement -- callers render their own placeholder.
+export function formatDimensionsMm(
+  length: number | null,
+  width: number | null,
+  height: number | null
+): string | null {
+  if (length === null || width === null || height === null) return null
+  const parts = [length, width, height].map((n) => dimensionFormatter.format(n))
+  return `${parts.join(" × ")} mm`
+}
+
 // Date only, no time. orders.created_at is a timestamp, but the legacy system
 // stored no time component, so every migrated order reads 00:00 -- showing it
 // would be showing a fact that is not there.

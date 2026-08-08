@@ -2,7 +2,12 @@ import Link from "next/link"
 import { AlertTriangle, ExternalLink } from "lucide-react"
 
 import type { OrderDetail } from "@/lib/queries/orders"
-import { formatDate, formatMoney } from "@/lib/format"
+import {
+  formatDate,
+  formatDimensionsMm,
+  formatMoney,
+  formatWeightKg,
+} from "@/lib/format"
 import { displayShippingMethod } from "@/lib/orders/shipping-method"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +18,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 export function OrderSummaryCards({ order }: { order: OrderDetail }) {
   const customer = order.customers
   const shipping = displayShippingMethod(order)
+  const metrics = order.metrics
+
+  const packedSize = formatDimensionsMm(
+    metrics.packed_length_mm,
+    metrics.packed_width_mm,
+    metrics.packed_height_mm
+  )
+  const dominantSize = formatDimensionsMm(
+    metrics.dominant_length_mm,
+    metrics.dominant_width_mm,
+    metrics.dominant_height_mm
+  )
 
   const addressLines = customer
     ? [
@@ -29,7 +46,9 @@ export function OrderSummaryCards({ order }: { order: OrderDetail }) {
     : []
 
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    // Four cards now, so the three-column row would leave one stranded. Two up
+    // on tablets, four across on a wide screen.
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium">Customer</CardTitle>
@@ -128,24 +147,133 @@ export function OrderSummaryCards({ order }: { order: OrderDetail }) {
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           <Field label="Goods">
-            <span className="tabular-nums">{formatMoney(order.goods_total)}</span>
+            <span className="tabular-nums">{formatMoney(metrics.goods_total)}</span>
           </Field>
-          <Field label="Postage">
+          <Field label="Postage charged">
             <span className="tabular-nums">
               {formatMoney(order.postage_and_handling)}
             </span>
           </Field>
+          {order.discount > 0 && (
+            <Field label="Discount">
+              <span className="tabular-nums">
+                −{formatMoney(order.discount)}
+              </span>
+            </Field>
+          )}
           <div className="flex items-center justify-between border-t border-border pt-3 font-medium">
             <span>Order total</span>
-            <span className="tabular-nums">{formatMoney(order.order_total)}</span>
+            <span className="tabular-nums">{formatMoney(metrics.order_total)}</span>
           </div>
+
+          <div className="space-y-3 border-t border-border pt-3">
+            <Field label="Cost of goods">
+              <span className="tabular-nums">{formatMoney(metrics.total_cost)}</span>
+            </Field>
+            <Field label="Postage paid">
+              <span className="tabular-nums">
+                {formatMoney(order.postage_paid)}
+              </span>
+            </Field>
+            <Field label="Gross profit">
+              <span
+                className={cn(
+                  "tabular-nums font-medium",
+                  metrics.gross_profit < 0 && "text-destructive"
+                )}
+              >
+                {formatMoney(metrics.gross_profit)}
+              </span>
+            </Field>
+          </div>
+
+          {/* Not a footnote. Legacy orders recorded no carrier cost, so profit
+              on them is overstated by roughly the postage -- and that is 203315
+              of the orders in the system (migration 20260808160000). Without
+              this line the number reads as measured rather than partial. */}
+          {order.postage_paid === 0 && (
+            <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              No carrier cost recorded — profit excludes what postage actually
+              cost.
+            </p>
+          )}
+          {metrics.uncosted_item_count > 0 && (
+            <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              {metrics.uncosted_item_count} item
+              {metrics.uncosted_item_count === 1 ? " has" : "s have"} no cost on
+              file — cost and profit are understated.
+            </p>
+          )}
+
           <p className="text-xs text-muted-foreground">
-            {order.transaction_count === 0
+            {metrics.transaction_count === 0
               ? "No transaction lines on this order."
-              : `${order.transaction_count} transaction ${
-                  order.transaction_count === 1 ? "line" : "lines"
+              : `${metrics.transaction_count} transaction ${
+                  metrics.transaction_count === 1 ? "line" : "lines"
                 }`}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Parcel</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <Field label="Items">
+            <span className="tabular-nums">{metrics.total_items}</span>
+          </Field>
+          <Field label="Weight">
+            <span className="tabular-nums">
+              {formatWeightKg(metrics.total_weight_kg)}
+            </span>
+          </Field>
+          <Field label="Chargeable">
+            <span
+              className={cn(
+                "tabular-nums",
+                // Worth pointing at: when volumetric wins, the parcel bills on
+                // its size and shrinking the box is what saves money.
+                metrics.chargeable_weight_kg > metrics.total_weight_kg &&
+                  "font-medium"
+              )}
+            >
+              {formatWeightKg(metrics.chargeable_weight_kg)}
+            </span>
+          </Field>
+
+          <div className="space-y-3 border-t border-border pt-3">
+            <Field label="Packed size">
+              <span className="tabular-nums">{packedSize ?? "—"}</span>
+            </Field>
+            {/* The two sizes answer different questions and are both worth
+                showing. Packed assumes every item stacks in its own footprint,
+                which is what to use when nothing nests; dominant is the
+                heaviest item's own carton, which is what to quote when the
+                small things ride inside it. */}
+            <Field label="Largest item">
+              <span className="tabular-nums">{dominantSize ?? "—"}</span>
+            </Field>
+          </div>
+
+          {metrics.has_estimated_dimensions && (
+            <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              At least one product has no recorded size — the packed size is an
+              estimate.
+            </p>
+          )}
+          {metrics.unresolved_item_count > 0 && (
+            <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              {metrics.unresolved_item_count} item
+              {metrics.unresolved_item_count === 1 ? "" : "s"} could not be
+              matched to a product — weight and size exclude
+              {metrics.unresolved_item_count === 1 ? " it" : " them"}.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

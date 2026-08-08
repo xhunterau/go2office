@@ -109,10 +109,46 @@ const CHECKS = [
           WHERE n.invoice_number IS DISTINCT FROM o.invoice_number
              OR n.status::text IS DISTINCT FROM lower(o.order_status)
              OR n.platform::text IS DISTINCT FROM lower(o.platform)
-             OR n.tracking_number IS DISTINCT FROM o.tracking_number
+             OR n.tracking_number IS DISTINCT FROM public.normalize_tracking_number(o.tracking_number)
              OR n.web_order_id IS DISTINCT FROM o.web_order_id`,
     assert: (r) => r.mismatches === 0,
     expect: '0',
+  },
+  {
+    // 004 disables orders_normalize_tracking and normalises inline instead, so
+    // nothing puts the value right if that inline call is ever dropped. The
+    // import stays green either way; the tracking column just fills with raw
+    // scanner output that no carrier site accepts.
+    name: 'TRACKING CHECK — tracking_number normalised',
+    critical: true,
+    // Idempotency, not "no barcode envelopes left". 353 rows keep their envelope
+    // legitimately: the function has no cut for their article format and returns
+    // them unchanged rather than guessing. Those rows are already at their fixed
+    // point, so they pass this check while a skipped normalisation cannot.
+    sql: `SELECT count(*)::int AS unnormalised
+          FROM public.orders
+          WHERE tracking_number IS DISTINCT FROM
+                public.normalize_tracking_number(tracking_number)`,
+    assert: (r) => r.unnormalised === 0,
+    expect: '0',
+    onFail:
+      'Section 2 of 004 ran without its normalize_tracking_number() call while the\n' +
+      '      triggers were disabled. Re-run 004, or repair in place with:\n' +
+      '      UPDATE public.orders SET tracking_number =\n' +
+      '        public.normalize_tracking_number(tracking_number)\n' +
+      '      WHERE tracking_number IS DISTINCT FROM\n' +
+      '            public.normalize_tracking_number(tracking_number);',
+  },
+  {
+    // Informational: the envelopes the function has no cut for. Measured
+    // 2026-08-08 at 591. A jump means a new carrier/label format appeared and
+    // normalize_tracking_number() needs a branch for it.
+    name: 'tracking numbers left uncut (no rule for that article format)',
+    sql: `SELECT count(*)::int AS uncut,
+                 COALESCE(string_agg(DISTINCT COALESCE(shipping_method::text,
+                          legacy_shipping_method, '(none)'), ', '), '') AS methods
+          FROM public.orders WHERE length(tracking_number) > 25`,
+    expect: '~591 as of 2026-08-08',
   },
   {
     name: 'order_transactions — field-by-field against the source',
@@ -189,7 +225,18 @@ const CHECKS = [
                  (SELECT count(*) FROM public.orders)::int AS orders,
                  (SELECT count(*) FROM public.order_transactions)::int AS transactions,
                  (SELECT count(*) FROM public.order_items)::int AS items,
-                 (SELECT sum(order_total) FROM public.order_totals)::text AS gross_sales`,
+                 (SELECT sum(order_total) FROM public.order_metrics_summary)::text AS gross_sales`,
+  },
+  {
+    name: 'order metrics summary rebuilt',
+    // Section 5 of 004 runs recompute_order_metrics(NULL) after the import,
+    // because sections 2 and 3 ran with the summary triggers disabled. Skipping
+    // it raises nothing -- the order screens just keep showing pre-import
+    // totals, weights and sizes. summary_rows must equal orders, and
+    // oldest_computed_at must be from this run.
+    sql: `SELECT (SELECT count(*) FROM public.orders)::int AS orders,
+                 (SELECT count(*) FROM public.order_metrics_summary)::int AS summary_rows,
+                 (SELECT min(computed_at) FROM public.order_metrics_summary)::text AS oldest_computed_at`,
   },
   {
     name: 'order status distribution',

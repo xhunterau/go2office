@@ -69,8 +69,8 @@ export function OrdersFilters() {
     <div className="flex flex-wrap items-end gap-3">
       <OrdersSearch />
 
-      {/* All ten statuses, including the four without a tab (new, pending,
-          processing, issued). */}
+      {/* All eight statuses, including the four without a tab (unpaid,
+          backorder, issued, and the two terminal ones). */}
       <SelectFilter
         label="Status"
         value={statusValue}

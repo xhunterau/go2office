@@ -24,15 +24,15 @@
 | `orders` | **203,315** | 发票号全局唯一，是主要检索入口 |
 | `order_transactions` | **250,413** | 平台卖出的**listing**（标题、listing id、售价） |
 | `order_items` | **250,687** | 仓库实际拣的**内部 SKU**，由 trigger 维护 |
-| `order_totals`（视图） | — | `goods_total` / `order_total` / `transaction_count` |
+| ~~`order_totals`（视图）~~ | — | 已于 `20260808180000` **删除**，由 `order_metrics_summary` 取代，见 `docs/order-metrics.md` |
 
 分布上几个对 UI 设计有直接影响的事实：
 
-- **状态极度倾斜**：completed 202,778 / cancelled 527 / processing 9 / issued 1。但枚举本身有 **10 个值**（迁移 `20260804100000` 补齐了 Laravel 下拉的全部选项），另外 6 个当前为 0 只是因为备份那一刻没订单停在上面。详见 §4.2——这条直接决定了 §5.2 的状态入口怎么做。
+- **状态极度倾斜**：completed 202,778 / cancelled 527 / processing 9 / issued 1。但枚举本身有 **8 个值**（迁移 `20260804100000` 补齐了 Laravel 下拉的全部选项，`20260808120000` / `20260808130000` 又删掉了不用的 `new` 与 `picked`），另外 4 个当前为 0 只是因为备份那一刻没订单停在上面。详见 §4.2——这条直接决定了 §5.2 的状态入口怎么做。
 - **平台**：ebay 178,244 / shopify 20,624 / backorder 3,878 / store 569。
 - **运送方式**：173,797 张落在新枚举（34 个值）、**29,143 张（14.3%）落在 `legacy_shipping_method` 文本列**（7 个已停用承运商）、375 张为空。
 - **4,919 张订单 `posted_on_date` 为空**（未发货）。
-- **25 张订单没有任何交易行**（`order_totals` 对它们返回 0）。
+- **25 张订单没有任何交易行**（`order_metrics_summary` 对它们返回 0）。
 - **313 行 `order_items.product_id` 为空**（14 个 SKU、331 件）——`custom_label` 匹配不到任何商品，是需要人工修的工作队列，DB 里已有专门的部分索引 `order_items_unresolved_idx` 支撑它。
 - **`sale_price` 可以是负数**（退款/冲正行，最低 -640.00）。金额展示不能假设非负。
 
@@ -65,6 +65,12 @@ products 3,122 行、inventory 2,098 行的写法**不能原样平移到 203,315
 不加索引的后果不是"慢一点"：178k 行 + 203k 行上的 `ilike '%x%'` 是每次按键都触发一次双表全扫。
 
 ### 3.3 `order_totals` 不能 join 进列表查询
+
+> **⚠️ 本节已被 2026-08-08 的订单指标轮次取代。** `order_totals` 视图已删除，`public.order_metrics_summary`（trigger 维护的表，每订单一行）取而代之，**可以**直接 join 进分页查询——这正是把它物化的目的。`fetchOrderList` 现在用一个内嵌读它，不再发第二条查询。
+>
+> 唯一没变的结论是「列表页不能按金额排序」，但换了理由：不再是聚合代价，而是 **PostgREST 无法按内嵌资源的列给父行排序**。2026-08-08 与业务方确认**不需要该功能**，此事已关闭，详见 `docs/order-metrics.md` §9。
+>
+> 以下保留原文，记录当时的判断依据。
 
 这条是迁移文件 `20260803160000_create_order_totals_view.sql` 尾部**写死的告诫**：该视图每被引用一次就聚合全部 250,413 行交易，`JOIN` 进分页查询等于"算 203,315 个总额来显示 20 个"。
 
@@ -136,7 +142,7 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 
 **类型**：Postgres 原生枚举 `public.order_status`，`orders.status` 列 `NOT NULL`、**无默认值**。TS 侧用 `Database["public"]["Enums"]["order_status"]`，`z.enum` 直接对齐。
 
-**9 个值，声明顺序即业务生命周期**（迁移 `20260804100000` 在原有 4 个基础上补齐了 Laravel 下拉的全部选项，详见 `docs/orders-domain-migration.md` §15；`20260808120000` 又删掉了 `new`）：
+**8 个值，声明顺序即业务生命周期**（迁移 `20260804100000` 在原有 4 个基础上补齐了 Laravel 下拉的全部选项，详见 `docs/orders-domain-migration.md` §15；`20260808120000` 删掉了 `new`，`20260808130000` 删掉了 `picked`）：
 
 | pos | label | 语义 | 当前订单数 |
 |---|---|---|---|
@@ -144,15 +150,16 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 | 2 | `unpaid` | 未付款（阻塞） | 0 |
 | 3 | `backorder` | 缺货待补（阻塞） | 0 |
 | 4 | `processing` | 处理中 | 9 |
-| 5 | `picked` | 已拣货 | 0 |
-| 6 | `labelled` | 已打面单 | 0 |
-| 7 | `issued` | 已发出 | 1 |
-| 8 | `completed` | 已完成 | **202,778** |
-| 9 | `cancelled` | 已取消 | 527 |
+| 5 | `labelled` | 已打面单 | 0 |
+| 6 | `issued` | 已发出 | 1 |
+| 7 | `completed` | 已完成 | **202,778** |
+| 8 | `cancelled` | 已取消 | 527 |
 
-那 5 个 0 不代表用不上——它们是 Laravel 一直提供的选项，只是最终备份的那一刻没有订单停在上面。**上线后新订单会真正铺开在这 9 个状态上**，这也是 §5.2 把状态筛选器从配角改成主角的原因。
+那 4 个 0 不代表用不上——它们是 Laravel 一直提供的选项，只是最终备份的那一刻没有订单停在上面。**上线后新订单会真正铺开在这 8 个状态上**，这也是 §5.2 把状态筛选器从配角改成主角的原因。
 
 > **2026-08-08 删除 `new`（用户决定）**：迁移 `20260808120000` 换类型重建了 `public.order_status`。原本 `new` 是随 Laravel 下拉一并补进来的，业务上不存在"刚进来"这个态。三项前置核对：0 行在用；最终备份只产出 `COMPLETED`/`CANCELLED`/`PROCESSING`/`ISSUED`，故 `004` 的 `lower(源值)::enum` 不受影响；全库只有 `orders.status` 与 `order_status_counts` 视图引用该类型，无默认值、无函数、无策略谓词涉及。**Postgres 没有 `DROP VALUE`**，所以该迁移是"重命名旧类型 → 建新类型 → `ALTER COLUMN ... USING status::text::新类型` → 丢弃旧类型"，会全表重写 203,315 行并持 ACCESS EXCLUSIVE 锁——**执行时不能有订单写入**，且结尾必须重跑 `ANALYZE`（重写会作废 `20260808100000` 精心刷新的统计信息）。
+
+> **2026-08-08 删除 `picked`（用户决定）**：迁移 `20260808130000`，做法与上面删 `new` 完全一致（换类型重建 + `USING status::text::新类型` + `ANALYZE`，全表重写 203,315 行、持 ACCESS EXCLUSIVE 锁，执行时不能有订单写入）。业务上订单从 `processing` 直接进 `labelled`，"拣了什么"记在 `order_items` 的拣货库位上，不是订单的一个状态。前置核对同样三项：0 行在用；`go2_orders.order_status` 只有 `COMPLETED`/`CANCELLED`/`PROCESSING`/`ISSUED`，`004` 不受影响；引用该类型的只有 `orders.status`、`orders_status_idx` 与 `order_status_counts` 视图。
 
 枚举遍历顺序就是生命周期顺序，所以下拉菜单直接按 `Database["public"]["Enums"]["order_status"]` 的声明序渲染即可，不要另建一套排序常量（两份顺序必然漂移）。
 
@@ -206,9 +213,10 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 | `Date` | `created_at` | 默认排序列（DESC，有索引） |
 | `Customer` | `customers.full_name`（回落 `platform_user_id`） | 内嵌 select，链到客户详情 |
 | `Platform` | 徽章 | ebay / shopify / backorder / store |
-| `Status` | 徽章 | 10 个值（§4.2）。completed / cancelled 用中性色，阻塞态（unpaid / backorder）琥珀色，其余流转态着色 |
-| `Items` | `order_totals.transaction_count` | |
-| `Total` | `order_totals.order_total` | 右对齐 tabular-nums；**不可排序**（§3.3） |
+| `Status` | 徽章 | 8 个值（§4.2）。completed / cancelled 用中性色，阻塞态（unpaid / backorder）琥珀色，其余流转态着色 |
+| `Items` | `order_metrics_summary.transaction_count` | |
+| `Weight` | `order_metrics_summary.chargeable_weight_kg` | 2026-08-08 新增。**计费重**（实重与体积重取大者），不是实重 |
+| `Total` | `order_metrics_summary.order_total` | 右对齐 tabular-nums；**不可排序**（理由已变，见 §3.3 的更新说明） |
 | `Shipping` | `COALESCE(shipping_method, legacy_shipping_method)` | legacy 值加一个弱化标记，见 §5.4 |
 | `Dispatched` | `posted_on_date`，空显示 `—` | |
 | （⋯） | `View order` / `Edit` / `Copy invoice number` | |
@@ -217,26 +225,27 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 
 **状态：从筛选项升为页面主结构**
 
-枚举补到 10 个值之后（§4.2），状态不再是"偶尔用来捞异常单"的下拉项——`unpaid` 待催款、`backorder` 待补货、`picked` 待打单、`labelled` 待发出，每一个都是一条日常工作队列。所以状态入口放在**列表顶部的一排 tab**，而不是埋进筛选栏：
+状态不再是"偶尔用来捞异常单"的下拉项——`pending` 待处理、`unpaid` 待催款、`backorder` 待补货、`labelled` 待发出，每一个都是一条日常工作队列。所以状态入口放在**列表顶部的一排 tab**，而不是埋进筛选栏：
 
 ```
-[ All ]  [ Needs action ]  [ Processing ]  [ Labelled ]  [ Picked ]
+[ All ]  [ Pending ]  [ Processing ]  [ Labelled ]  [ Needs action ]
 ```
 
 > **2026-08-08 落地时收窄（用户决定）**：原计划的 8 个 tab 减为 5 个。
 > - `Unpaid` / `On backorder` **并入 `Needs action`**——后者本就是 `NOT IN (completed, cancelled)`，这两个状态已经在里面，单独给 tab 等于同一批订单在一行里出现两次；
-> - **不要 `Completed` / `Cancelled` tab**：99.7% 的订单落在 completed，做成 tab 是给"不需要处理的东西"占掉主导航；两者仍可从筛选栏的 10 值下拉选到；
+> - **不要 `Completed` / `Cancelled` tab**：99.7% 的订单落在 completed，做成 tab 是给"不需要处理的东西"占掉主导航；两者仍可从筛选栏的 8 值下拉选到；
 > - **`Processing` 单独提出来**（Laravel 停机时卡住的 9 张就在这里，§4.2.1 其二）；
-> - **`Labelled` 排在 `Picked` 前面**，与枚举的生命周期顺序相反——这是按实际作业顺序排的，不是笔误，改动 `STATUS_TABS` 时不要"顺手修正"回去；
-- **`Needs action` 挪到最后一个**，并收窄口径（见下）。
+> - **`Needs action` 挪到最后一个**，并收窄口径（见下）。
 
-**`Needs action` 的口径**（`NEEDS_ACTION_EXCLUDED`，`src/lib/queries/orders.ts`）：排除 `completed` / `cancelled` / `pending` / `processing` / `picked` / `labelled`，即剩下 `unpaid` / `backorder` / `issued`。前两个是终态，后四个要么已在流转、要么已有自己的 tab——算进来会让同一批订单在同一行里出现两次。**新增枚举值默认落进 `Needs action`**，这是安全的方向：新队列会自己冒出来，而不是无声消失。
+> **2026-08-08 二次调整（用户决定）**：`Picked` tab 随枚举值一起删除（§4.2），空出来的位置给 **`Pending` 单独一个 tab**——它是新订单进来的第一站，从 `Needs action` 里拆出来单独盯。tab 顺序按作业顺序排：`Pending → Processing → Labelled`，`Needs action` 仍在最后。
+
+**`Needs action` 的口径**（`NEEDS_ACTION_EXCLUDED`，`src/lib/queries/orders.ts`）：排除 `completed` / `cancelled` / `pending` / `processing` / `labelled`，即剩下 `unpaid` / `backorder` / `issued`。前两个是终态，后三个各有自己的 tab——算进来会让同一批订单在同一行里出现两次。**新增枚举值默认落进 `Needs action`**，这是安全的方向：新队列会自己冒出来，而不是无声消失。
 
 - **`Needs action`** 是聚合项：`status NOT IN ('completed','cancelled')`。这是运营每天真正要盯的那一屏，也是唯一一个不随枚举增删而失效的入口。
 - tab 上带计数。**但计数必须走单独一次按 status 分组的聚合查询**，不是每个 tab 各发一次 count——`orders_status_idx` 在这上面是一次 Index Only Scan（实测 65 ms、`Heap Fetches: 0`），比 8 次分别 count 便宜得多。
   **发法是查 `public.order_status_counts` 视图**（§4.3 决策 A / §8.1）：PostgREST 的顶层聚合在本项目是禁用的，`.select("status, count()")` 会 400（§3.4）。`Needs action` 的数字在 TS 侧从同一份结果里求和（`total - completed - cancelled`），不额外发查询。
 - 历史数据下这排 tab 会显得很空（99.7% 落在 Completed），**这是正常的**，不要因此把它做成动态隐藏空 tab——那样上线后队列有货了反而看不见入口。
-- 完整的 10 值下拉仍保留在筛选栏里，覆盖 tab 没铺开的 `new` / `pending` / `processing` / `issued`。
+- 完整的 8 值下拉仍保留在筛选栏里，覆盖 tab 没铺开的 `unpaid` / `backorder` / `issued` 与两个终态。
 
 **其余下拉 / 开关筛选**
 
@@ -397,7 +406,7 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 
 **删除：靠 CASCADE，不做二次清理。** `order_items.transaction_id` 是 `ON DELETE CASCADE`，删交易行即删其下全部拣货明细，不会留下孤儿。目前 `order_items` 上**没有**任何库存联动（发货→库存流水在 §13），所以删除只改这张订单的金额口径。确认文案（规则 9）必须报出连带删除的明细条数——套装行收起时，用户看不到自己在删几行。
 
-删到一条不剩是**允许**的：迁移进来的 25 张订单本来就是零交易行，`order_totals` 对它们返回 0。
+删到一条不剩是**允许**的：迁移进来的 25 张订单本来就是零交易行，`order_metrics_summary` 对它们返回 0。
 
 ### 6.5 未解析明细的标记
 
@@ -641,7 +650,7 @@ ANALYZE public.order_items;
 3. **trigger 联动**：改一条交易行的 `quantity`，确认 `order_items` 被重建、库位继承行为符合 §6.4；改订单的 `comments` / `tracking_number` 确认**没有**触发重建。后半句是本轮最重要的一次验证——trigger 的 `WHEN` 子句就是为它写的。
 4. **`rebuild_order_items_for_order`**：确认重建后 `is_auto_generated` 变 `true`、行数符合当前 BOM。**只在新建的测试订单上做，禁止碰任何历史订单**——该函数是 `DELETE` + `INSERT`，没有回滚路径，历史明细不可再生。（原文写的"挑一个卖过套装的历史订单……测完要能回滚"是错的，回滚不存在。）
 5. **未解析行**：确认 313 行在详情页正确高亮，`sku_snapshot` 有展示。
-6. **金额一致性**：抽查几张订单，`order_totals.order_total` 应等于 `Σ(sale_price × quantity) + orders.postage_and_handling`；至少测一张含负数 `sale_price` 的退款订单。
+6. **金额一致性**：抽查几张订单，`order_metrics_summary.order_total` 应等于 `Σ(sale_price × quantity) + orders.postage_and_handling − orders.discount`；至少测一张含负数 `sale_price` 的退款订单。
 7. **无交易行订单**：那 25 张应正常渲染为 0，不能白屏或报错。
 8. **删除客户被拦**：确认 `23503` 被翻译成带订单数的文案。
 9. **五路搜索各测一次**，尤其 SKU 反查（挑一个卖得最多的 SKU）与 suburb 模糊（挑一个大小写混杂的 suburb 名）。

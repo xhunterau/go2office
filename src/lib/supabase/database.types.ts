@@ -231,6 +231,9 @@ export type Database = {
           sea_freight_aud_per_cbm: number
           air_volumetric_kg_per_cbm: number
           sea_volumetric_kg_per_cbm: number
+          // Outbound domestic parcels only. Separate from the two inbound
+          // freight factors above on purpose -- see migration 20260808160000.
+          parcel_volumetric_kg_per_cbm: number
           updated_at: string
         }
         Insert: {
@@ -242,6 +245,7 @@ export type Database = {
           sea_freight_aud_per_cbm: number
           air_volumetric_kg_per_cbm?: number
           sea_volumetric_kg_per_cbm?: number
+          parcel_volumetric_kg_per_cbm?: number
           updated_at?: string
         }
         Update: {
@@ -253,6 +257,7 @@ export type Database = {
           sea_freight_aud_per_cbm?: number
           air_volumetric_kg_per_cbm?: number
           sea_volumetric_kg_per_cbm?: number
+          parcel_volumetric_kg_per_cbm?: number
           updated_at?: string
         }
         Relationships: []
@@ -506,8 +511,15 @@ export type Database = {
           // shipping_method ?? legacy_shipping_method.
           legacy_shipping_method: string | null
           // Postage for the whole order. Upstream it was per transaction line;
-          // migration 20260803170000 summed it up to here.
+          // migration 20260803170000 summed it up to here. This is what the
+          // CUSTOMER paid.
           postage_and_handling: number
+          // What we paid the carrier, and what we discounted. Both added by
+          // migration 20260808160000 and 0 on all 203315 migrated orders --
+          // legacy data recorded neither, so gross_profit on a historical order
+          // is overstated by roughly the postage.
+          postage_paid: number
+          discount: number
           tracking_number: string | null
           web_order_id: string | null
           comments: string | null
@@ -524,6 +536,8 @@ export type Database = {
           shipping_method?: Database["public"]["Enums"]["shipping_method"] | null
           legacy_shipping_method?: string | null
           postage_and_handling?: number
+          postage_paid?: number
+          discount?: number
           tracking_number?: string | null
           web_order_id?: string | null
           comments?: string | null
@@ -540,6 +554,8 @@ export type Database = {
           shipping_method?: Database["public"]["Enums"]["shipping_method"] | null
           legacy_shipping_method?: string | null
           postage_and_handling?: number
+          postage_paid?: number
+          discount?: number
           tracking_number?: string | null
           web_order_id?: string | null
           comments?: string | null
@@ -681,6 +697,117 @@ export type Database = {
             columns: ["location_id"]
             isOneToOne: false
             referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      // Per-order aggregates, maintained by trigger (migration 20260808170000).
+      // Replaces the order_totals view, which was dropped.
+      //
+      // A real table, so it CAN be joined and sorted in a paginated list query
+      // -- that is the whole reason it is materialised. Contrast the warning the
+      // old view carried.
+      //
+      // Read-only from the application: no write policy, and no write grant
+      // after migration 20260808200000 stripped the ones Supabase's default
+      // privileges had handed out. The Insert/Update shapes below exist because
+      // the supabase-js client generic requires them, not because anything can
+      // use them. To refresh one order call the rebuild_order_metrics RPC.
+      order_metrics_summary: {
+        Row: {
+          order_id: number
+          total_items: number
+          transaction_count: number
+          // Item lines that resolved to no product. They carry a quantity but
+          // no weight, size or cost, so every physical metric on this row is
+          // understated when this is non-zero.
+          unresolved_item_count: number
+          // Item lines whose product has no derivable cost, understating
+          // total_cost and gross_profit. Currently 0 across the whole table.
+          uncosted_item_count: number
+          // At least one line's product has a zero dimension and fell back to
+          // the 10mm default, so the packed_* figures are a guess. True on
+          // 13695 orders (6.7%) -- show it in the UI rather than printing the
+          // size as if it were measured.
+          has_estimated_dimensions: boolean
+          total_weight_kg: number
+          // The greater of total_weight_kg and the packed box's volumetric
+          // weight, at pricing_settings.parcel_volumetric_kg_per_cbm.
+          chargeable_weight_kg: number
+          goods_total: number
+          // goods_total + orders.postage_and_handling - orders.discount
+          order_total: number
+          total_cost: number
+          // order_total - orders.postage_paid - total_cost * (1 + gst_rate).
+          // Overstated on migrated orders, which all have postage_paid 0.
+          gross_profit: number
+          // Whole-order packing estimate in mm: units stacked along height.
+          // Null when the order has no resolvable item lines at all (3981
+          // orders: 25 with no transactions, 3697 with transactions but no
+          // items, 251 whose items are all unresolved).
+          packed_length_mm: number | null
+          packed_width_mm: number | null
+          packed_height_mm: number | null
+          max_dimension_mm: number | null
+          // Single-unit size of the order's heaviest product by chargeable
+          // weight -- what to quote a carrier when the small items plausibly
+          // ride inside the big item's carton. Null on the same orders as
+          // packed_*, and individually null where that dimension is unrecorded.
+          dominant_length_mm: number | null
+          dominant_width_mm: number | null
+          dominant_height_mm: number | null
+          computed_at: string
+        }
+        Insert: {
+          order_id: number
+          total_items?: number
+          transaction_count?: number
+          unresolved_item_count?: number
+          uncosted_item_count?: number
+          has_estimated_dimensions?: boolean
+          total_weight_kg?: number
+          chargeable_weight_kg?: number
+          goods_total?: number
+          order_total?: number
+          total_cost?: number
+          gross_profit?: number
+          packed_length_mm?: number | null
+          packed_width_mm?: number | null
+          packed_height_mm?: number | null
+          max_dimension_mm?: number | null
+          dominant_length_mm?: number | null
+          dominant_width_mm?: number | null
+          dominant_height_mm?: number | null
+          computed_at?: string
+        }
+        Update: {
+          order_id?: number
+          total_items?: number
+          transaction_count?: number
+          unresolved_item_count?: number
+          uncosted_item_count?: number
+          has_estimated_dimensions?: boolean
+          total_weight_kg?: number
+          chargeable_weight_kg?: number
+          goods_total?: number
+          order_total?: number
+          total_cost?: number
+          gross_profit?: number
+          packed_length_mm?: number | null
+          packed_width_mm?: number | null
+          packed_height_mm?: number | null
+          max_dimension_mm?: number | null
+          dominant_length_mm?: number | null
+          dominant_width_mm?: number | null
+          dominant_height_mm?: number | null
+          computed_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_metrics_summary_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: true
+            referencedRelation: "orders"
             referencedColumns: ["id"]
           },
         ]
@@ -838,28 +965,12 @@ export type Database = {
         }
         Relationships: []
       }
-      // Replaces the dropped go2_orders.total_sale column (migration
-      // 20260803160000). Do not join this in a paginated list query -- it
-      // aggregates all order_transactions rows every time it is referenced.
-      // Page first, then select the totals for that page's ids.
-      order_totals: {
-        Row: {
-          order_id: number
-          goods_total: number
-          // goods_total + orders.postage_and_handling. There is no postage_total
-          // any more: postage is a plain column on orders, so aggregating it
-          // here would just read one row back.
-          order_total: number
-          transaction_count: number
-        }
-        Relationships: []
-      }
       // One row per order_status actually present in orders (migration
       // 20260808100000). Backs the status tabs on /orders.
       //
-      // Unlike order_totals this one IS meant to be queried directly: it is a
-      // single index-only scan on orders_status_idx, issued once per page load
-      // rather than joined per row. It exists at all because PostgREST
+      // Safe to query directly: it is a single index-only scan on
+      // orders_status_idx, issued once per page load rather than joined per
+      // row. It exists at all because PostgREST
       // top-level aggregates are disabled here -- `select=status,count()`
       // returns PGRST123. See docs/orders-ui.md section 4.3 decision A.
       //
@@ -878,6 +989,15 @@ export type Database = {
       charm_price: {
         Args: { value: number }
         Returns: number
+      }
+      // Strips the GS1-128 envelope a barcode gun produces down to the carrier
+      // article ID. Idempotent, and returns the input unchanged when it has no
+      // envelope, so it is safe to call on an already-clean value. The
+      // orders_normalize_tracking_* triggers apply it on write; calling it
+      // directly is only needed for bulk paths that disable those triggers.
+      normalize_tracking_number: {
+        Args: { p_tracking: string | null }
+        Returns: string | null
       }
       // Applies a signed delta and writes the matching ledger row. Returns the
       // new inventory_movements.id.
@@ -944,6 +1064,24 @@ export type Database = {
         Args: { p_order_id: number }
         Returns: number
       }
+      // Recomputes one order's row in order_metrics_summary and returns the
+      // number of rows written (1, or 0 if the order is gone). The triggers keep
+      // that table current on their own; call this to repair a row by hand, or
+      // after changing a product that a specific order depends on.
+      rebuild_order_metrics: {
+        Args: { p_order_id: number }
+        Returns: number
+      }
+      // Two more functions exist in the schema and are deliberately absent here,
+      // because both are revoked from PUBLIC and cannot be called through
+      // PostgREST (migrations 20260808170000 and 20260808190000):
+      //
+      //   recompute_order_metrics(bigint[])      -- the workhorse; a NULL
+      //     argument refreshes all 203315 rows, which is why it is not exposed.
+      //   refresh_stale_order_metrics(interval)  -- pg_cron's hourly pass.
+      //
+      // Adding entries for them would let application code call something that
+      // can only fail at runtime.
     }
     Enums: {
       currency_code: "USD" | "AUD" | "CNY"
@@ -958,14 +1096,14 @@ export type Database = {
       // dropdown built by iterating it comes out right.
       // 'labelled' is the British double-L spelling, matching Laravel's value;
       // 004 casts with lower() and no mapping, so it has to match exactly.
-      // `new` was dropped by 20260808120000: it was imported from the Laravel
-      // dropdown and never used by this business.
+      // `new` was dropped by 20260808120000 and `picked` by 20260808130000:
+      // both were imported from the Laravel dropdown and never used by this
+      // business.
       order_status:
         | "pending"
         | "unpaid"
         | "backorder"
         | "processing"
-        | "picked"
         | "labelled"
         | "issued"
         | "completed"

@@ -28,7 +28,6 @@ export const ORDER_STATUSES = [
   "unpaid",
   "backorder",
   "processing",
-  "picked",
   "labelled",
   "issued",
   "completed",
@@ -38,10 +37,9 @@ export const ORDER_STATUSES = [
 // What "Needs action" leaves out. Two kinds of exclusion, both deliberate:
 //
 //   completed, cancelled  -- finished, nothing to do
-//   processing, picked, labelled, pending
-//                         -- already moving, and the first three have a tab of
-//                            their own, so counting them here would put the
-//                            same orders on the row twice
+//   pending, processing, labelled
+//                         -- each has a tab of its own, so counting them here
+//                            would put the same orders on the row twice
 //
 // What is left is the set nobody is currently acting on: unpaid (waiting on the
 // customer), backorder (waiting on stock), issued. Adding a status to the enum
@@ -52,7 +50,6 @@ export const NEEDS_ACTION_EXCLUDED = [
   "cancelled",
   "pending",
   "processing",
-  "picked",
   "labelled",
 ] as const satisfies readonly OrderStatus[]
 
@@ -113,6 +110,85 @@ export function parseOrderFilters(params: SearchParams): OrderFilters {
   }
 }
 
+// Per-order aggregates, embedded rather than fetched in a second round trip.
+//
+// This used to be a follow-up query against the order_totals view, because that
+// view aggregated all 250413 transaction rows on every reference and joining it
+// per page would have computed 203315 totals to show 20. order_metrics_summary
+// (migration 20260808170000) is a table with one row per order, keyed on the
+// primary key, so an embed here is 20 index lookups.
+//
+// order_id is the summary table's primary key as well as its foreign key, so
+// PostgREST treats this as a to-one relationship and returns an object, not an
+// array. Null only if a summary row is somehow missing -- the triggers and the
+// foreign key together mean that should not happen.
+const METRICS_EMBED = `order_metrics_summary(
+    total_items,
+    transaction_count,
+    unresolved_item_count,
+    uncosted_item_count,
+    has_estimated_dimensions,
+    total_weight_kg,
+    chargeable_weight_kg,
+    goods_total,
+    order_total,
+    total_cost,
+    gross_profit,
+    packed_length_mm,
+    packed_width_mm,
+    packed_height_mm,
+    max_dimension_mm,
+    dominant_length_mm,
+    dominant_width_mm,
+    dominant_height_mm
+  )`
+
+export type OrderMetrics = Pick<
+  Database["public"]["Tables"]["order_metrics_summary"]["Row"],
+  | "total_items"
+  | "transaction_count"
+  | "unresolved_item_count"
+  | "uncosted_item_count"
+  | "has_estimated_dimensions"
+  | "total_weight_kg"
+  | "chargeable_weight_kg"
+  | "goods_total"
+  | "order_total"
+  | "total_cost"
+  | "gross_profit"
+  | "packed_length_mm"
+  | "packed_width_mm"
+  | "packed_height_mm"
+  | "max_dimension_mm"
+  | "dominant_length_mm"
+  | "dominant_width_mm"
+  | "dominant_height_mm"
+>
+
+// What a caller gets when the embed comes back null. Everything at zero is the
+// truthful reading for the 25 orders with no transaction lines, and a safe one
+// for the case that should not occur.
+export const EMPTY_METRICS: OrderMetrics = {
+  total_items: 0,
+  transaction_count: 0,
+  unresolved_item_count: 0,
+  uncosted_item_count: 0,
+  has_estimated_dimensions: false,
+  total_weight_kg: 0,
+  chargeable_weight_kg: 0,
+  goods_total: 0,
+  order_total: 0,
+  total_cost: 0,
+  gross_profit: 0,
+  packed_length_mm: null,
+  packed_width_mm: null,
+  packed_height_mm: null,
+  max_dimension_mm: null,
+  dominant_length_mm: null,
+  dominant_width_mm: null,
+  dominant_height_mm: null,
+}
+
 // Columns the list table renders. The customer is embedded rather than joined
 // through a flattened view: orders.customer_id is indexed and 20 rows of nested
 // select costs less than a view that has to be kept in sync by hand (rule 18).
@@ -128,7 +204,8 @@ const LIST_COLUMNS = `
   posted_on_date,
   created_at,
   customer_id,
-  customers(id, full_name, platform_user_id, email)
+  customers(id, full_name, platform_user_id, email),
+  ${METRICS_EMBED}
 `
 
 // Same columns, but the customer embed becomes an inner join so a filter on a
@@ -160,11 +237,9 @@ export type OrderListRow = {
   created_at: string
   customer_id: number
   customers: EmbeddedCustomer | null
-  // Filled in by a second query against order_totals, keyed on this page's ids.
-  // Zero for the 25 orders that have no transaction lines at all.
-  goods_total: number
-  order_total: number
-  transaction_count: number
+  // Flattened from the order_metrics_summary embed, so the table component keeps
+  // reading plain fields. Zero for the 25 orders with no transaction lines.
+  metrics: OrderMetrics
 }
 
 export type OrderListResult = {
@@ -321,46 +396,20 @@ export async function fetchOrderList(
   const { data, count, error } = await query.range(from, to)
   if (error) return { ...EMPTY, error: error.message }
 
-  const page = (data ?? []) as unknown as Omit<
-    OrderListRow,
-    "goods_total" | "order_total" | "transaction_count"
-  >[]
+  const page = (data ?? []) as unknown as (Omit<OrderListRow, "metrics"> & {
+    order_metrics_summary: OrderMetrics | null
+  })[]
 
   const total = count ?? 0
   // PostgREST returns the exact tally once the estimate drops below its
   // threshold, so anything at or under one page is known to be exact.
   const isEstimate = total > page.length
 
-  if (page.length === 0) {
-    return { rows: [], count: total, isEstimate, error: null, unknownSku: false }
-  }
-
-  // Totals for this page only. order_totals aggregates all 250413 transaction
-  // rows every time it is referenced, so joining it into the query above would
-  // compute 203315 totals to display 20 (migration 20260803160000 says so in
-  // as many words).
-  const { data: totals, error: totalsError } = await supabase
-    .from("order_totals")
-    .select("order_id, goods_total, order_total, transaction_count")
-    .in(
-      "order_id",
-      page.map((row) => row.id)
-    )
-
-  if (totalsError) return { ...EMPTY, error: totalsError.message }
-
-  const byOrder = new Map(totals?.map((t) => [t.order_id, t]) ?? [])
-
   return {
-    rows: page.map((row) => {
-      const t = byOrder.get(row.id)
-      return {
-        ...row,
-        goods_total: t?.goods_total ?? 0,
-        order_total: t?.order_total ?? 0,
-        transaction_count: t?.transaction_count ?? 0,
-      }
-    }),
+    rows: page.map(({ order_metrics_summary, ...row }) => ({
+      ...row,
+      metrics: order_metrics_summary ?? EMPTY_METRICS,
+    })),
     count: total,
     isEstimate,
     error: null,
@@ -423,12 +472,15 @@ const DETAIL_COLUMNS = `
   comments,
   posted_on_date,
   created_at,
+  postage_paid,
+  discount,
   customer_id,
   customers(
     id, platform_user_id, full_name, email, phone, is_anonymised_email,
     company_name, address_line1, address_line2, address_line3, address_line4,
     city, state, postcode, country
-  )
+  ),
+  ${METRICS_EMBED}
 `
 
 export type OrderDetailCustomer = Pick<
@@ -465,11 +517,11 @@ export type OrderDetail = Pick<
   | "posted_on_date"
   | "created_at"
   | "customer_id"
+  | "postage_paid"
+  | "discount"
 > & {
   customers: OrderDetailCustomer | null
-  goods_total: number
-  order_total: number
-  transaction_count: number
+  metrics: OrderMetrics
 }
 
 export async function fetchOrderDetail(
@@ -485,26 +537,13 @@ export async function fetchOrderDetail(
   if (error) return { order: null, error: error.message }
   if (!data) return { order: null, error: null }
 
-  const { data: totals, error: totalsError } = await supabase
-    .from("order_totals")
-    .select("goods_total, order_total, transaction_count")
-    .eq("order_id", id)
-    .maybeSingle()
-
-  if (totalsError) return { order: null, error: totalsError.message }
+  const { order_metrics_summary, ...order } = data as unknown as Omit<
+    OrderDetail,
+    "metrics"
+  > & { order_metrics_summary: OrderMetrics | null }
 
   return {
-    order: {
-      ...(data as unknown as Omit<
-        OrderDetail,
-        "goods_total" | "order_total" | "transaction_count"
-      >),
-      // The 25 orders with no transaction lines get no row back from the view's
-      // LEFT JOIN side; they render at zero rather than blank.
-      goods_total: totals?.goods_total ?? 0,
-      order_total: totals?.order_total ?? 0,
-      transaction_count: totals?.transaction_count ?? 0,
-    },
+    order: { ...order, metrics: order_metrics_summary ?? EMPTY_METRICS },
     error: null,
   }
 }

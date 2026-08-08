@@ -58,6 +58,16 @@ ON CONFLICT (id) DO UPDATE SET
 --   3. now(), only for a row nobody has ever migrated and Laravel cannot date.
 -- Dropping step 2 would silently reset the creation date of 1767 products to the
 -- day of the migration.
+--
+-- Note on sku / name / ebay_title / length / width / height: the
+-- products_normalize_fields trigger (migration 20260808140000) rewrites these on
+-- the way in. SKUs are upper-cased and the three dimensions are sorted so that
+-- length >= width >= height, so the imported rows will NOT byte-match
+-- go2_products for the 476 products (15%) whose dimensions were recorded in
+-- another order. That is intended -- the packing estimate in
+-- order_metrics_summary stacks units along height and needs the invariant -- but
+-- it means a direct column-by-column diff against the source will report those
+-- rows as mismatched. Compare the sorted triples, not the raw ones.
 INSERT INTO public.products (
   id, sku, model, upc, brand_id, name, image_url, origin_id, supplier_id,
   currency, purchase_price, is_gst, weight, length, width, height,

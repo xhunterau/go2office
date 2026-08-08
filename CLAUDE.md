@@ -79,7 +79,9 @@
 - **003 脚本的额外风险**：`003` 的 `qty` 映射为 `GREATEST(源值, 0)`，每次执行都会用 Laravel 旧值**覆盖** `inventory_levels.qty`。新系统开始真实出入库后再执行它，会静默抹掉这些操作且不报错。执行前必须暂停库存写入，上线后该脚本立即退休。
 - **004 脚本的额外风险（trigger 必须禁用）**：`004` 第 3 段用 `ALTER TABLE ... DISABLE TRIGGER` 关掉 `order_transactions_rebuild_items_insert` / `..._update` 两个触发器，插完 `order_transactions` 与 `order_items` 后再打开。**这两句不可删、不可拆到不同事务**——触发器开着灌 `order_transactions` 会立刻用今天的 BOM 重算全部 25 万行 `order_items`，覆盖历史实际记录、丢掉 3,026 行无法重算的明细和 28,893 行拣货库位，**全程不报错**。脚本尾部诊断 6（`order_items` 中 `is_auto_generated = true` 的行数应为 0）是唯一的事后检验。
 - **004 的 `shipping_method` 映射**：`orders.shipping_method` 枚举只覆盖 16 个遗留值，其余 7 个已停用承运商落到 `legacy_shipping_method` 文本列。改动 `public.shipping_method` 枚举时必须同步检查 `004` 的 `CASE` 映射表，否则新值不会被用上、旧值会静默改道进 legacy 列。
-- **004 的 `order_status` / `sales_platform` 映射（拼写必须逐字对齐）**：这两列不走 `CASE` 映射，而是 `lower(源值)::enum` 直接转换，所以**每个枚举标签必须是 Laravel 值的精确小写形式**。`public.order_status` 现有 **9** 个值（`20260804100000` 补齐了 Laravel 下拉的全部选项，`20260808120000` 又删掉了业务不用的 `new`——0 行在用，且最终备份只产出 `COMPLETED`/`CANCELLED`/`PROCESSING`/`ISSUED` 四个值，故删它不影响 004），其中 `labelled` 是英式双 L——写成 `labeled` 会让转换无值可解，**在最终同步时炸掉整个 004 事务**，而这个错误在此之前不会以任何形式暴露。新增或改动这两个枚举的值时，必须同步核对 Laravel 侧的原始拼写。
+- **004 的第 5 段（`order_metrics_summary` 重建）不可省**：第 2 段与第 3 段用 `ALTER TABLE ... DISABLE TRIGGER` 关掉 `order_metrics_summary` 的 8 个 `oms_*` 触发器（`orders` 上 2 个、`order_transactions` 上 3 个、`order_items` 上 3 个），导入完成后由**第 5 段** `SELECT public.recompute_order_metrics(NULL)` 全量重建。这些触发器是**语句级**的，留着它们不是「触发 25 万次」，而是一次触发拿到一个 25 万行的 transition table、再变成一个 25 万元素的 `bigint[]` 交给重算函数，同样跑不动。**跳过第 5 段不会报任何错**——订单列表页与详情页会一直显示导入前的金额、重量与尺寸。诊断 8a（`summary_rows` 应等于 `orders`，且 `oldest_computed_at` 来自本次运行）是唯一的事后检验。详见 `docs/order-metrics.md`
+- **001 的商品行不再逐字等于 `go2_products`**：`products_normalize_fields` 触发器（迁移 `20260808140000`）在写入时把 SKU 大写、把长宽高排序成 L ≥ W ≥ H（476 个商品、15% 受影响）。这是 `order_metrics_summary` 装箱估算的前置条件（它沿高度累加），但意味着**对 001 做列对列 diff 校验时这些行会被报成不一致**——要比较排序后的三元组
+- **004 的 `order_status` / `sales_platform` 映射（拼写必须逐字对齐）**：这两列不走 `CASE` 映射，而是 `lower(源值)::enum` 直接转换，所以**每个枚举标签必须是 Laravel 值的精确小写形式**。`public.order_status` 现有 **8** 个值（`20260804100000` 补齐了 Laravel 下拉的全部选项，`20260808120000` 删掉了业务不用的 `new`，`20260808130000` 又删掉了同样不用的 `picked`——两者均 0 行在用，且最终备份只产出 `COMPLETED`/`CANCELLED`/`PROCESSING`/`ISSUED` 四个值，故删它们不影响 004），其中 `labelled` 是英式双 L——写成 `labeled` 会让转换无值可解，**在最终同步时炸掉整个 004 事务**，而这个错误在此之前不会以任何形式暴露。新增或改动这两个枚举的值时，必须同步核对 Laravel 侧的原始拼写。
 - **执行方式**：一律用 `node scripts/migration/run-all.mjs`（按 001→002→003→004 顺序执行 + 自动验证），**严禁**用 `supabase db query` 跑这些脚本——它不接受多语句文件，而按分号拆开执行会破坏事务边界（`004` 的 `DISABLE TRIGGER` 与 INSERT 必须同事务）。`003` 默认被拦住，需显式加 `--i-have-suspended-inventory-writes`。只验证不导数用 `--checks-only`。
 - **远端 `statement_timeout` 是 2 分钟**：首次导入约 50 秒，但最终切换是全量 upsert 重跑，实测 132 秒被杀。`004` 的四个事务块已各自 `SET LOCAL statement_timeout = 0`；新增大数据量脚本时必须照做。
 - **`go2_*` 临时表没有任何索引**：针对它们写校验查询时严禁用相关子查询（每行一次全表扫），必须先 `GROUP BY` 聚合再 `JOIN`。
@@ -102,4 +104,19 @@
 - **手工维护**：`src/lib/supabase/database.types.ts` 由**手工维护**，不是生成产物。`npx supabase gen types` 需要 Docker/Podman 拉 `postgres-meta` 镜像（本机没有），会静默失败并把目标文件清空 —— 严禁用 `> src/lib/supabase/database.types.ts` 重定向直接覆盖。
 - **强制同步**：新增或修改表 / 视图 / 枚举 / 函数的迁移，必须在**同一次改动**中手工补齐该文件对应的 `Tables` / `Views` / `Enums` / `Functions` 条目。
 - **视图类型**：视图只需 `Row`（无 `Insert` / `Update`），用 `Views<"view_name">` 取用。
+
+# 19. 商品字段归一化触发器（products_normalize_fields）
+- **不变量**：`public.products` 上的 `products_normalize_fields` BEFORE INSERT/UPDATE 触发器（迁移 `20260808140000`，移植自 xpros 的 `format_product_fields_logic` 模块 1 与 3）保证三件事：`sku` 必为 `upper(trim(...))`；`length >= width >= height`；`name` / `ebay_title` 在**被写入时**做 `initcap(trim(...))`。
+- **两处依赖它，且都是静默失败**：
+  - `public.rebuild_order_items` 用 `WHERE sku = upper(trim(v_label))` 匹配 `custom_label`。只归一化 label 一侧才能走 `products_sku_key` 唯一索引；一旦停用触发器导致库里出现非大写 SKU，匹配会失败并**静默生成 `product_id IS NULL` 的占位行**，不报错。
+  - `public.order_metrics_summary` 的装箱估算沿**高度**累加（`max(L) × max(W) × sum(H)`），内建「H 是最短边」的假设。尺寸失序会让该商品所在的每张订单计费重虚高。
+- **`name` 的 initcap 只对新写入生效**：触发器里的 `NEW.name IS DISTINCT FROM OLD.name` 守卫**不可删**。商品表单保存时提交全部字段，删掉守卫会让「改一次价格」顺带重写商品名，把有意保留的 1,464 行历史命名（47%）在日常编辑中悄悄回填掉。原因见 `docs/order-metrics.md` §5。
+- **严禁移植 xpros 的零售价美化**：xpros 同名函数的模块 2 在写入时做 `CEIL(x+0.01) - 0.05`，与本项目的 `floor(x) + 0.95` **不是同一个规则**，且本项目已有规则 17 管理的双实现。加进来会变成三实现，并在用户保存时静默改掉刚输入的价格。
+
+# 20. 运单号归一化（normalize_tracking_number）
+- **不变量**：`public.orders` 上的 `orders_normalize_tracking_insert` / `_update` 两个触发器（迁移 `20260808210000`）保证 `tracking_number` 存的是承运商 article ID，而不是条码枪扫出来的 GS1-128 全串。函数 `public.normalize_tracking_number(text)` 幂等，找不到规则时**原样返回**。详见 `docs/order-tracking-number.md`。
+- **规则表按前缀而非 `shipping_method` 分支**：`33GLH`（在用）/ `33HKT`（已停用，留着只为修 3,026 行历史）截 12 位，`TMP` / `RPP` 截 25 位，`99` 截 23 位。**新增承运商或换 eParcel charge account 时必须加对应分支**，否则新单的运单号会以 41～74 字符的原始条码串入库——承运商官网不认、订单页读不出，且**不报任何错**。严禁照抄 xpros 的 `S8P` / `33RCA` / `34HA9` / `34HAA` 常量，那是 xpros 自己的账号前缀，在本库 0 命中。
+- **`004` 必须关掉它并内联调用（两半都不可删）**：这两个触发器是**行级**的，灌 203,315 行订单就是真触发 203,315 次，所以 `004` 第 2 段 `DISABLE` 它们、在 `SELECT` 里内联 `public.normalize_tracking_number(o.tracking_number)`、段尾再 `ENABLE`。只删 `DISABLE` 是慢；**只删内联调用则会静默导入 27,709 行原始扫码输出**。
+- **列对列 diff 必须两侧都套函数**：`004` 诊断 7 与 `run-all.mjs` 的「orders — field-by-field against the source」比对 `tracking_number` 时，源侧要套上同一个函数，否则一次正确的导入会报出五位数 mismatch（与规则 15 里 `001` 的商品行是同一类陷阱）。
+- **校验查幂等，不查「还有没有条码串」**：353 行因没有对应规则而合法保留信封，用 `~ '01[0-9]{14}91'` 断言为 0 会让检查永远失败。正确写法是 `tracking_number IS DISTINCT FROM public.normalize_tracking_number(tracking_number)` 计数为 0。
 
