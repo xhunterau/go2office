@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/lib/supabase/database.types"
+import {
+  escapeLike,
+  positiveIntParam,
+  textParam,
+} from "@/lib/queries/search-params"
 
 export const INVENTORY_PAGE_SIZE = 20
 
@@ -38,26 +43,11 @@ export type InventoryFilters = {
   page: number
 }
 
-// Escape PostgREST `ilike` wildcards so user input is matched literally.
-function escapeLike(value: string): string {
-  return value.replace(/[%_]/g, (match) => `\\${match}`)
-}
-
 export function parseInventoryFilters(
   params: Record<string, string | string[] | undefined>
 ): InventoryFilters {
-  const text = (key: string): string | null => {
-    const raw = params[key]
-    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim()
-    return value ? value : null
-  }
-
-  const numeric = (key: string): number | null => {
-    const value = text(key)
-    if (!value) return null
-    const parsed = Number(value)
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
-  }
+  const text = (key: string) => textParam(params, key)
+  const numeric = (key: string) => positiveIntParam(params, key)
 
   // Default view is "in stock". Two thirds of the catalogue sits at zero — most
   // of it never received rather than sold out — so an unfiltered list buries

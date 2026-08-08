@@ -1,6 +1,7 @@
 # Orders / Customers UI 轮次 — 开发文档
 
-> 状态：**计划中，四项决策已确认；`order_status` 已扩展到 10 个值**（2026-08-02，见 §4 / §4.2）
+> 状态：**已确认，实施中**（2026-08-08）—— 四项原决策 + 五项实施决策已定案，实测数据见 §3.4
+> 修订：2026-08-08（远端实测一轮，推翻 §3.1 / §5.3 / §11.2 三处判断，新增阻塞项处置，见 §3.4 与 §4.3）
 > 前置文档：`docs/orders-domain-migration.md`（迁移层已完成并验证，四表已落库）
 > 参考前轮：`docs/inventory-ui.md`（列表页 + 行展开 + Dialog 的既有骨架，本轮大量复用）
 > 相关规则：CLAUDE.md 规则 2（RESTful 路由）、6（双重校验）、7（ActionResult + sonner）、9（全局 useConfirm）、12（Dialog 视口安全）、18（types 手工维护）
@@ -45,6 +46,8 @@ products 3,122 行、inventory 2,098 行的写法**不能原样平移到 203,315
 
 可选：`count: "estimated"`（先取 planner 估算，估算值小于阈值时才退回精确计数）、`count: "planned"`（永远只用估算）、或干脆不显示总数改用游标式翻页。**已定为估算计数**，见 §4 决策 2。
 
+> **2026-08-08 实测修正**：估算计数读的是 `pg_class.reltuples`，而迁移后它一直是陈旧的（orders 记着 246,475，真实 203,315，高 21%）。跑一次 `ANALYZE` 后回到精确值。**因此索引迁移末尾必须带 `ANALYZE`**，见 §8.1。同时实测发现深翻页并不需要游标分页，见 §3.4。
+
 ### 3.2 模糊搜索没有可用索引
 
 现有索引全是普通 btree：
@@ -76,6 +79,39 @@ const { data: totals } = await supabase
 ```
 
 **直接后果：列表页不能按金额排序，也不能按金额筛选。** 那需要物化视图或 trigger 维护的存储列，按迁移注释的说法"要做时再决定，现在不要预建"。本轮不做，UI 上也不提供这两个入口。
+
+### 3.4 远端实测（2026-08-08，编码前）
+
+编码前对远端库跑了一轮只读探测，三项结果推翻了本文原有判断，一项确认了阻塞。
+
+**其一，PostgREST 顶层聚合被禁用。** `GET /rest/v1/orders?select=status,count()` 返回：
+
+```
+HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowed"}
+```
+
+`db-aggregates-enabled` 是关着的，所以 §5.2 写的"一次 `GROUP BY status` 聚合查询"**发不出去**。注意这与 `/locations` 页在用的 `inventory_levels(count)`（[queries/locations.ts:32](src/lib/queries/locations.ts#L32)）不是同一个特性——那是内嵌资源计数，不受此开关影响，§7.1 的 `orders(count)` 因此仍然可行。处置见 §4.3 决策 A。
+
+**其二，`authenticated` 角色的 `statement_timeout` 是 8 秒**（`anon` 是 3 秒）。这是每个页面查询的真实预算。规则 15 记的"远端 2 分钟"只适用于迁移路径（`postgres` 角色），不要拿它当页面查询的余量。
+
+**其三，统计信息陈旧曾让两个关键查询慢到不可用，`ANALYZE` 后各快两个数量级。** 同一台库、同样的查询：
+
+| 查询 | ANALYZE 前 | ANALYZE 后 |
+|---|---|---|
+| `pg_class.reltuples`（估算计数的数据源） | orders = 246,475（真实 203,315） | 203,315 精确 |
+| `/orders` 第 1 页 | 6 ms | — |
+| `/orders` 第 5,000 页（`OFFSET 100000`） | **3,220 ms** | **60 ms** |
+| SKU 两跳反查，最热 SKU（`product_id = 11`，7,100 张订单） | **7,385 ms**（逼近 8 秒超时） | **19 ms** |
+
+根因是 planner 把 `order_items_product_id_idx` 的命中行数估低了 50 倍（估 140、实际 7,134），于是选了 nested loop 逐行回查 `order_transactions`。`ANALYZE` 之后同一个查询走 Nested Loop Semi Join，390 倍提速。
+
+**由此产生的三处设计修正：**
+
+1. **§11.2「深翻页超过 1 秒需改游标分页」不再成立**——60 ms。OFFSET 分页保留，省掉整套游标实现（§4.3 决策 C）。
+2. **§5.3 的 SKU 两跳"唯一需要实测计划"一项通过**——`!inner` 嵌套过滤按原方案走，不需要 RPC。
+3. **`ANALYZE` 必须进迁移**（§8.1 末尾），否则估算计数会显示"约 246,000"这样一个凭空高出 21% 的数。
+
+**其四，`pg_trgm` 确认未安装**（远端 extension 列表只有 `moddatetime` / `pg_stat_statements` / `pgcrypto` / `plpgsql` / `uuid-ossp` / `supabase_vault`），§8.1 的迁移是必需的。`shipping_method` 枚举实测 34 个值，与 §5.4 的数字一致。
 
 ## 4. 已确认决策（2026-08-02）
 
@@ -146,6 +182,16 @@ const { data: totals } = await supabase
 
 `orders.updated_at` 全部 203,315 行都落在 2026-08-02 那一个半小时内（迁移执行时刻，distinct 天数 = 1）。详情页**不要显示 "Last updated"**——那会让人以为这批订单昨天被人动过。等真有编辑发生后它才开始有意义。
 
+### 4.3 实施决策（2026-08-08，基于 §3.4 实测，取向为最低风险）
+
+| # | 决策点 | 结论 | 为什么这是风险最低的一条 |
+|---|---|---|---|
+| A | 状态 tab 的计数怎么发 | 新建 `public.order_status_counts` 视图，随 §8.1 的迁移一起建 | 另一条路是打开 PostgREST 的 `db-aggregates-enabled`——那是项目级配置，会让**所有**表都能被匿名发起聚合查询，为一个计数改全局开关不划算。视图只读、无需 `EXECUTE` 授权、不依赖该开关，且按既有 `order_totals` 的写法带 `security_invoker` 后 RLS 照旧生效 |
+| B | 保存新运送方式时 `legacy_shipping_method` 怎么处理 | **保留原值**，仅不再作为显示源（`COALESCE` 优先取 `shipping_method`） | 清空是不可逆的，会抹掉 29,143 张订单当年的真实承运商。保留只是多一列冗余数据，代价是零 |
+| C | 分页方式 | 保留 OFFSET，不实现游标分页；**不提供"跳到最后一页"** | §3.4 实测第 5,000 页 60 ms。游标分页要重写筛选与 URL 状态，为一个不存在的问题引入的改动面反而更大 |
+| D | 未解析明细的可见性 | 除 §6.5 的展开区高亮外，**父交易行上也带 `Unresolved` 徽章** | §6.1 默认全部收起，只在展开区标记等于这 313 行在详情页永远看不见。父行标记是纯展示改动 |
+| E | 本轮边界 | 严格执行决策 1：不做修复队列、不做发货扣库存、不做金额排序 | 三项都涉及写库存或写历史明细，是本域风险最高的部分，留给下一轮单独验证 |
+
 ## 5. `/orders` 订单列表页
 
 沿用 `/inventory` 的骨架（Server Component 页面 + 客户端筛选栏 + 分页 + 行展开），三个组件近乎 1:1 平移。
@@ -177,7 +223,8 @@ const { data: totals } = await supabase
 ```
 
 - **`Needs action`** 是聚合项：`status NOT IN ('completed','cancelled')`。这是运营每天真正要盯的那一屏，也是唯一一个不随枚举增删而失效的入口。
-- tab 上带计数。**但计数必须走单独一次 `GROUP BY status` 聚合查询**，不是每个 tab 各发一次 count——`orders_status_idx` 在这上面是一次索引扫，比 8 次分别 count 便宜得多。
+- tab 上带计数。**但计数必须走单独一次按 status 分组的聚合查询**，不是每个 tab 各发一次 count——`orders_status_idx` 在这上面是一次 Index Only Scan（实测 65 ms、`Heap Fetches: 0`），比 8 次分别 count 便宜得多。
+  **发法是查 `public.order_status_counts` 视图**（§4.3 决策 A / §8.1）：PostgREST 的顶层聚合在本项目是禁用的，`.select("status, count()")` 会 400（§3.4）。`Needs action` 的数字在 TS 侧从同一份结果里求和（`total - completed - cancelled`），不额外发查询。
 - 历史数据下这排 tab 会显得很空（99.7% 落在 Completed），**这是正常的**，不要因此把它做成动态隐藏空 tab——那样上线后队列有货了反而看不见入口。
 - 完整的 10 值下拉仍保留在筛选栏里，覆盖 tab 没铺开的 `new` / `pending` / `processing` / `issued`。
 
@@ -215,6 +262,20 @@ supabase
 
 **不要**改成"先查 customers 拿一批 id、再 `.in('customer_id', ids)`"：一个常见姓氏能命中几千个客户，那个 `IN` 列表会先撑爆 URL 长度，再撑爆查询计划。
 
+> **2026-08-08 实测：`!inner` 方案确认采用。** PostgREST 为内嵌过滤生成的是 `INNER JOIN LATERAL`，热态实测（各跑 3 次）：
+>
+> | 查询 | LATERAL（PostgREST 实际形状） | CTE MATERIALIZED 改写 |
+> |---|---|---|
+> | `city ~ sydney` | 98–104 ms | 71–404 ms |
+> | `city ~ rich` | 83–230 ms | 21–113 ms |
+> | `full_name ~ smith` | 31–42 ms | 32–36 ms |
+> | `full_name ~ li`（极宽泛） | **20–23 ms** | **506–974 ms** |
+> | `email ~ gmail` | 56–57 ms | 226–433 ms |
+>
+> 曾考虑用 `WITH ... AS MATERIALIZED` 强制从 customers 侧驱动（PostgREST 表达不了，需要 RPC）。**实测否掉了**：它只在中等选择度上略胜，在宽泛词上因为要物化几万个 id 反而慢 25 倍。LATERAL 让 planner 按选择度自行择边，是更稳的那个。
+>
+> **冷缓存首次命中可能是秒级**（`city ~ sydney` 首跑 3,250 ms、`full_name ~ smith` 首跑 705 ms），第二次起回落到上表。这是预热而不是设计缺陷，但值得知道——首次部署后头几次搜索会明显偏慢。
+
 **SKU 维度是唯一需要两跳的**，因为 `orders → order_transactions → order_items` 隔了两层：
 
 ```ts
@@ -230,13 +291,18 @@ supabase
 
 这条路径是本轮**唯一需要实测计划的查询**：热销 SKU 在 `order_items` 里可能有上万行，两层 `!inner` 的执行计划要用 `EXPLAIN ANALYZE` 确认走的是 `order_items_product_id_idx` 而不是 hash join 全表。见 §11 第 1 项。
 
+> **2026-08-08 实测：通过，但结论有条件。** 最热的 SKU（`product_id = 11`，7,100 张订单）在 `ANALYZE` 后是 19 ms，走 Nested Loop Semi Join：`orders_created_at_idx` 驱动 → `order_transactions_order_id_idx` → `order_items_transaction_id_idx`。
+> **条件是统计信息必须新鲜**：`ANALYZE` 之前同一个查询是 7,385 ms，planner 把命中行数估低 50 倍后选了从 `order_items` 侧驱动的 nested loop。这个查询是本轮离 8 秒超时最近的一个，统计信息一陈旧它就第一个倒。上线后若报"SKU 搜索很慢"，先查 `pg_stat_user_tables.last_autoanalyze`，不要先去改查询。
+
 ### 5.4 运送方式的显示
 
 `shipping_method` 枚举用的是 `PascalCase_Snake` 拼写（`Mypost_Reg_S_Box`），与项目其他枚举的小写风格不一致——这一点在迁移时就是**已知并接受**的（`docs/orders-domain-migration.md` §4.1），不会改。
 
 所以需要一张 34 项的展示映射表 `SHIPPING_METHOD_LABELS`（`Mypost_Reg_S_Box` → `MyPost Regular S Box`），放 `src/lib/orders/shipping-method.ts`，列表页与详情页共用。
 
-`legacy_shipping_method` 的 7 个值（Zone6 Regular/Express、Sendle、Sendle 250g、Winit、Fast Track、Toll B2C）**不进下拉选项**——它们是已停用承运商。显示时以弱化样式加 `(retired)` 后缀。字段编辑已采纳（决策 1），所以编辑器里这 29,143 张订单必须显示"当前值已停用，保存将改为新枚举值"的提示，因为保存一次就再也回不去了。
+`legacy_shipping_method` 的 7 个值（Zone6 Regular/Express、Sendle、Sendle 250g、Winit、Fast Track、Toll B2C）**不进下拉选项**——它们是已停用承运商。显示时以弱化样式加 `(retired)` 后缀。字段编辑已采纳（决策 1），所以编辑器里这 29,143 张订单必须显示"当前值已停用，保存后列表与详情页将改为显示新值"的提示。
+
+**保存时不清空 `legacy_shipping_method`**（§4.3 决策 B）。写入 `shipping_method` 后，显示侧的 `COALESCE(shipping_method, legacy_shipping_method)` 自然优先取新值，legacy 列静静留着当年的承运商记录。清空它是不可逆的，而留着的代价只是一列冗余数据。**因此 `orderUpdateSchema` 不包含 `legacy_shipping_method`，Server Action 也不得 UPDATE 该列。**
 
 ## 6. `/orders/[id]` 订单详情页
 
@@ -307,6 +373,8 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 
 `product_id IS NULL` 的行在详情页要显眼（琥珀色行 + `Unresolved` 徽章），并显示 `sku_snapshot`——那是唯一的线索。
 
+**父交易行上也要带 `Unresolved` 徽章**（§4.3 决策 D）。§6.1 的展开区默认全部收起，只在展开区里做标记等于这 313 行在详情页永远看不见——打开订单的人没有理由去逐行展开找问题。父行标记是让"这张订单里有东西没解析"这件事在收起状态下就成立。
+
 按决策 1，**集中的修复队列本轮不做**（移入 §13）。所以这 313 行在本轮只是"看得见、改不了"：详情页标出来，但没有指派商品的入口。这是有意的取舍，不是遗漏——但要知道它意味着 14 个 SKU 的销售数据在报表里会一直缺着，直到下一轮补上队列。
 
 ### 6.6 `is_auto_generated` 的显示
@@ -350,9 +418,13 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 
 ## 8. Schema 改动
 
-### 8.1 必需：`pg_trgm` 与搜索索引
+### 8.1 必需：`pg_trgm`、搜索索引与状态计数视图
 
-文件：`supabase/migrations/2026080410xxxx_create_orders_search_indexes.sql`
+文件：`supabase/migrations/20260808100000_create_orders_search_indexes.sql`
+
+**三件事在同一个迁移里**：`pg_trgm` + 7 个搜索索引 + `order_status_counts` 视图（§4.3 决策 A）+ 收尾的 `ANALYZE`（§3.4）。
+
+**开头必须 `SET LOCAL statement_timeout = 0`**：7 个 GIN 索引建在 178k + 203k 行上，远端默认超时会把整个事务杀掉。这与规则 15 里 `004` 脚本的做法是同一个理由。
 
 按决策 3 的五个维度倒推，需要建的索引如下——**只建实际要搜的列**：
 
@@ -386,9 +458,50 @@ CREATE INDEX customers_postcode_idx
 
 `customers.platform_user_id` 已有 UNIQUE btree，但那只服务等值查询，模糊搜索用不上——两个索引各司其职，不冲突。
 
-按规则 14 包 `BEGIN; / COMMIT;`。
+**状态计数视图**（§4.3 决策 A，替代发不出去的顶层聚合）：
 
-**体积要实测**：7 个 GIN 索引建在 178k + 203k 行上，建完跑一次 `pg_relation_size` 记录到本文档。如果某个索引大得离谱（尤其 `full_name`），再考虑把该维度降级为前缀匹配。先建再量，不要凭感觉砍。
+```sql
+CREATE VIEW public.order_status_counts AS
+  SELECT status, count(*)::bigint AS order_count
+  FROM public.orders
+  GROUP BY status;
+
+-- 与 order_totals 同样的理由：视图默认以 owner 身份跑，加上 security_invoker
+-- 后 orders 上的 RLS 才继续生效。
+ALTER VIEW public.order_status_counts SET (security_invoker = on);
+GRANT SELECT ON public.order_status_counts TO authenticated;
+```
+
+这个视图**可以**直接查，与 §3.3 禁止 join 的 `order_totals` 不同：它是一次 `orders_status_idx` 上的 Index Only Scan（实测 65 ms、`Heap Fetches: 0`），且只在列表页顶部发一次、不参与分页 join。
+
+**收尾 `ANALYZE`**（§3.4，缺了它估算计数会显示一个高出 21% 的数、SKU 反查会慢 390 倍）：
+
+```sql
+ANALYZE public.orders;
+ANALYZE public.customers;
+ANALYZE public.order_transactions;
+ANALYZE public.order_items;
+```
+
+按规则 14 包 `BEGIN; / COMMIT;`。（`ANALYZE` 可以在事务内执行；`CREATE INDEX CONCURRENTLY` 不行，所以这里用的是普通 `CREATE INDEX`——建索引期间对两张表的写会被阻塞，但本轮执行时还没有写入方。）
+
+按规则 18，视图建完要在 `database.types.ts` 的 `Views` 下补 `order_status_counts` 的 `Row`。
+
+**体积实测（2026-08-08 建完后）**——总计 **53 MB**，没有一个需要降级为前缀匹配：
+
+| 索引 | 体积 |
+|---|---|
+| `customers_email_trgm_idx` | 16 MB |
+| `orders_tracking_number_trgm_idx` | 8,728 kB |
+| `customers_platform_user_id_trgm_idx` | 8,680 kB |
+| `customers_full_name_trgm_idx` | 8,576 kB |
+| `customers_city_trgm_idx` | 6,592 kB |
+| `orders_invoice_number_trgm_idx` | 4,016 kB |
+| `customers_postcode_idx`（btree） | 1,272 kB |
+
+参照：`orders` 堆表 87 MB、`customers` 堆表 66 MB。`email` 最大是因为平均 29.5 字符、几乎无重复（89,287 个是 eBay 中继地址，前缀各不相同）。
+
+**索引生效性实测**：稀有词全部走 `Bitmap Index Scan`（`%zzqx%` 在 full_name / tracking / email 上均为 0.07–0.28 ms）。常见词（`%smith%` / `%gmail%` / `%99312%`）planner 会选 Seq Scan 提前退出——**这是正确的计划而不是索引失效**，因为 `LIMIT 20` 在高命中率下扫几十行就够了，实测 0.2–76 ms。
 
 ### 8.2 可能需要：订单列表用的扁平视图
 
@@ -412,7 +525,7 @@ CREATE INDEX customers_postcode_idx
 
 | 文件 | 导出 |
 |---|---|
-| `orders.ts` | `ORDERS_PAGE_SIZE`、`parseOrderFilters`、`fetchOrderList`（含 §3.3 的两段式取总额、§5.3 的五路搜索分支）、`fetchOrderDetail`、`fetchOrderTransactionsWithItems` |
+| `orders.ts` | `ORDERS_PAGE_SIZE`、`parseOrderFilters`、`fetchOrderList`（含 §3.3 的两段式取总额、§5.3 的五路搜索分支）、`fetchOrderStatusCounts`（查 `order_status_counts` 视图，§5.2）、`fetchOrderDetail`、`fetchOrderTransactionsWithItems` |
 | `customers.ts` | `CUSTOMERS_PAGE_SIZE`、`parseCustomerFilters`、`fetchCustomerList`、`fetchCustomerDetail`、`fetchCustomerOrders` |
 
 沿用 `parseInventoryFilters` 的既有写法：`text()` / `numeric()` 取值 + `escapeLike()` 转义 `%` `_`（[queries/inventory.ts:42](src/lib/queries/inventory.ts#L42)）。
@@ -443,7 +556,7 @@ CREATE INDEX customers_postcode_idx
 ## 10. 落地文件清单
 
 **新增（迁移）**
-- `supabase/migrations/2026080410xxxx_create_orders_search_indexes.sql`
+- `supabase/migrations/20260808100000_create_orders_search_indexes.sql`（pg_trgm + 7 个索引 + `order_status_counts` 视图 + `ANALYZE`，见 §8.1）
 
 **新增（应用层）**
 - `src/lib/queries/orders.ts`、`src/lib/queries/customers.ts`
@@ -459,14 +572,14 @@ CREATE INDEX customers_postcode_idx
 
 **修改**
 - `src/app/(dashboard)/orders/page.tsx`、`customers/page.tsx`（替换占位）
-- `src/lib/supabase/database.types.ts`：本轮四表与视图**已就位**，只有 §8.2 真的建了 `order_list` 视图时才需补（规则 18）
+- `src/lib/supabase/database.types.ts`：四表与 `order_totals` **已就位**，本轮需补 `order_status_counts` 的 `Row`（§8.1）。§8.2 的 `order_list` 视图仍不建
 
 ## 11. 验证计划
 
-1. **索引真的被用上**：对搜索查询跑 `EXPLAIN ANALYZE`，确认走 `Bitmap Index Scan` 而非 `Seq Scan`。这是本轮唯一"看起来能用、实际全表扫"的地方——20 万行上跑得动，但每次都是几百毫秒起。
-2. **首屏耗时**：`/orders` 第 1 页、第 5,000 页各测一次。深翻页的 `OFFSET` 在 20 万行上会退化，若超过 1 秒需改游标分页。
+1. **索引真的被用上**：对搜索查询跑 `EXPLAIN ANALYZE`，确认走 `Bitmap Index Scan` 而非 `Seq Scan`。这是本轮唯一"看起来能用、实际全表扫"的地方——20 万行上跑得动，但每次都是几百毫秒起（无索引时 `customers.full_name ILIKE '%smith%'` 实测 96 ms Seq Scan）。
+2. **首屏耗时**：`/orders` 第 1 页、第 5,000 页各测一次。~~深翻页的 `OFFSET` 在 20 万行上会退化，若超过 1 秒需改游标分页。~~ **已于 2026-08-08 实测：第 1 页 6 ms、第 5,000 页 60 ms，OFFSET 分页保留（§4.3 决策 C）。** 本项复核即可，判据改为「不超过 `authenticated` 的 8 秒预算，且第 5,000 页在 200 ms 内」。
 3. **trigger 联动**：改一条交易行的 `quantity`，确认 `order_items` 被重建、库位继承行为符合 §6.4；改订单的 `comments` / `tracking_number` 确认**没有**触发重建。后半句是本轮最重要的一次验证——trigger 的 `WHEN` 子句就是为它写的。
-4. **`rebuild_order_items_for_order`**：挑一个卖过套装的历史订单，确认重建后 `is_auto_generated` 变 `true`、行数符合当前 BOM。**测完要能回滚**——历史数据不可再生。建议先在测试订单上做。
+4. **`rebuild_order_items_for_order`**：确认重建后 `is_auto_generated` 变 `true`、行数符合当前 BOM。**只在新建的测试订单上做，禁止碰任何历史订单**——该函数是 `DELETE` + `INSERT`，没有回滚路径，历史明细不可再生。（原文写的"挑一个卖过套装的历史订单……测完要能回滚"是错的，回滚不存在。）
 5. **未解析行**：确认 313 行在详情页正确高亮，`sku_snapshot` 有展示。
 6. **金额一致性**：抽查几张订单，`order_totals.order_total` 应等于 `Σ(sale_price × quantity) + orders.postage_and_handling`；至少测一张含负数 `sale_price` 的退款订单。
 7. **无交易行订单**：那 25 张应正常渲染为 0，不能白屏或报错。
@@ -474,13 +587,17 @@ CREATE INDEX customers_postcode_idx
 9. **五路搜索各测一次**，尤其 SKU 反查（挑一个卖得最多的 SKU）与 suburb 模糊（挑一个大小写混杂的 suburb 名）。
 10. **索引体积**：建完索引跑 `pg_relation_size`，把 7 个 GIN 索引的实际大小记回 §8.1。
 11. **规则 12**：所有 Dialog 桌面端 + 移动端各验一次。
+12. **状态 tab 计数**：确认 `order_status_counts` 能被 `authenticated` 查到（RLS 经 `security_invoker` 生效），且 8 个 tab 的数字只发一次请求。
+13. **legacy 运送方式保存后不丢**（§4.3 决策 B）：挑一张 `legacy_shipping_method` 非空的订单，改成新枚举值后确认该列**仍保有原值**，且列表/详情显示的是新值。
 
 ## 12. 风险与注意事项
 
 - **订单录入通道不存在**：Laravel 停用后，eBay / Shopify 的订单**目前没有任何进入新系统的路径**。本轮做的是"管理已有订单"，不是"接单"。同步/导入需要单独一轮（按规则 4，属于 Trigger.dev 的活）。这是整个 orders 域上线前的硬阻塞，本文档只负责记录它。
 - **历史订单不能补扣库存**：`inventory_movements` 从迁移那天起账（`docs/inventory-ui.md` §9），203,315 张历史订单没有对应流水。下一轮做发货联动时必须限定为"从此以后新发的货"，且要有明确的界面/文案区分，否则会出现"这张 2019 年的订单为什么不扣库存"的困惑。
 - **本轮的订单编辑不影响库存**：改 status、打勾发货，库存数字都不会动（决策 1 把联动推到下一轮）。这件事要让用户知道，否则会以为系统在背后扣了。
-- **深翻页**：`OFFSET 100000` 在 Postgres 上是真的把前 10 万行数过去。20 万行、每页 20 条 = 10,164 页。实际上没人会翻到第 5,000 页，但**分页组件不该提供"跳到最后一页"**这种一键触发最坏情况的入口。
+- **深翻页**：`OFFSET 100000` 在 Postgres 上是真的把前 10 万行数过去。20 万行、每页 20 条 = 10,164 页。实测 60 ms（§3.4），在预算内，所以保留 OFFSET；但**分页组件仍不提供"跳到最后一页"**——省掉一个一键触发最坏情况的入口，成本为零。
+- **每个页面查询的预算是 8 秒**（`authenticated` 角色的 `statement_timeout`，§3.4）。超时的表现是查询直接报错、不是变慢。离这条线最近的是 SKU 反查（§5.3），而它对统计信息的新鲜度敏感。
+- **统计信息陈旧是本域的系统性风险**：`ANALYZE` 前后 SKU 反查差 390 倍、深翻页差 54 倍、估算计数差 21%（§3.4）。迁移末尾会跑一次，但上线后大量写入时 autovacuum 未必跟得上。任何"订单页突然变慢"的报障，第一步查 `pg_stat_user_tables.last_autoanalyze`。
 - **`order_items` 的手工修改会被 trigger 悄悄吃掉**：§6.4 已述。这是本轮最容易做出"用户改完看起来成功了、刷新后没了"的地方。
 - **枚举扩展是单向的**：`shipping_method` 加值要 `ALTER TYPE ... ADD VALUE`（且不能在同一事务里用），删值基本不可能。UI 上不要提供任何"新增运送方式"的入口。
 - **`customers` 的去重口径**：按 eBay 用户名（回落邮箱）分组。同一个人用两个 eBay 账号会是两个客户，UI 上没有合并功能，本轮也不做。

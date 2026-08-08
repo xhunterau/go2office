@@ -854,6 +854,25 @@ export type Database = {
         }
         Relationships: []
       }
+      // One row per order_status actually present in orders (migration
+      // 20260808100000). Backs the status tabs on /orders.
+      //
+      // Unlike order_totals this one IS meant to be queried directly: it is a
+      // single index-only scan on orders_status_idx, issued once per page load
+      // rather than joined per row. It exists at all because PostgREST
+      // top-level aggregates are disabled here -- `select=status,count()`
+      // returns PGRST123. See docs/orders-ui.md section 4.3 decision A.
+      //
+      // Statuses with no orders do not appear. Render the tab row from the
+      // order_status enum and default a missing status to 0; do not derive the
+      // tab list from these rows.
+      order_status_counts: {
+        Row: {
+          status: Database["public"]["Enums"]["order_status"]
+          order_count: number
+        }
+        Relationships: []
+      }
     }
     Functions: {
       charm_price: {

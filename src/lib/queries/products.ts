@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/lib/supabase/database.types"
+import {
+  escapeLike,
+  positiveIntParam,
+  textParam,
+} from "@/lib/queries/search-params"
 
 export const PRODUCTS_PAGE_SIZE = 20
 
@@ -78,28 +83,13 @@ export type ProductFilters = {
   page: number
 }
 
-// Escape PostgREST `ilike` wildcards so user input is matched literally.
-function escapeLike(value: string): string {
-  return value.replace(/[%_]/g, (match) => `\\${match}`)
-}
-
 // Parse raw URL search params into a typed, sanitized filter object.
 // Invalid/empty values collapse to null so they never reach the query.
 export function parseProductFilters(
   params: Record<string, string | string[] | undefined>
 ): ProductFilters {
-  const text = (key: string): string | null => {
-    const raw = params[key]
-    const value = (Array.isArray(raw) ? raw[0] : raw)?.trim()
-    return value ? value : null
-  }
-
-  const numeric = (key: string): number | null => {
-    const value = text(key)
-    if (!value) return null
-    const parsed = Number(value)
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null
-  }
+  const text = (key: string) => textParam(params, key)
+  const numeric = (key: string) => positiveIntParam(params, key)
 
   const statusRaw = text("status")
   const status =
