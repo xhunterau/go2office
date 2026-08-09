@@ -44,11 +44,17 @@ const inventoryItems = [
   { title: "Locations", href: "/locations" },
 ]
 
+// "System Constants" is the page /settings has always been; it moved under a
+// group rather than to a new URL when Postcodes joined it.
+const settingsItems = [
+  { title: "System Constants", href: "/settings" },
+  { title: "Postcodes", href: "/settings/postcodes" },
+]
+
 const navItems = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard },
   { title: "Orders", href: "/orders", icon: ShoppingCart },
   { title: "Customers", href: "/customers", icon: Users },
-  { title: "Settings", href: "/settings", icon: Settings },
 ]
 
 export function AppSidebar() {
@@ -59,6 +65,7 @@ export function AppSidebar() {
   const isInventoryActive = inventoryItems.some((item) =>
     pathname.startsWith(item.href)
   )
+  const isSettingsActive = pathname.startsWith("/settings")
 
   return (
     <Sidebar collapsible="icon">
@@ -184,6 +191,48 @@ export function AppSidebar() {
                     </SidebarMenuItem>
                   )
                 })}
+
+              <Collapsible
+                asChild
+                defaultOpen={isSettingsActive}
+                className="group/collapsible"
+              >
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      tooltip="Settings"
+                      isActive={isSettingsActive}
+                    >
+                      <Settings />
+                      <span>Settings</span>
+                      <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {settingsItems.map((item) => {
+                        // Exact match for the group's own root, or it stays lit
+                        // while a child page is open — same reason /products
+                        // above is special-cased.
+                        const isActive =
+                          item.href === "/settings"
+                            ? pathname === "/settings"
+                            : pathname.startsWith(item.href)
+
+                        return (
+                          <SidebarMenuSubItem key={item.href}>
+                            <SidebarMenuSubButton asChild isActive={isActive}>
+                              <Link href={item.href}>
+                                <span>{item.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        )
+                      })}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

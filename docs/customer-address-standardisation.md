@@ -148,7 +148,35 @@ state / country 交给诊断 11。
 
 ---
 
-## 5. 尚未移植的部分
+## 5. 参考表的维护入口：`/settings/postcodes`
+
+侧边栏 `Settings → Postcodes`。`postcodes` 的增删改查页面，`public.postcodes` 上的
+RLS（迁移 `20260809110000`）本来就给 `authenticated` 开了全量权限，这个页面只是把入口
+补上，没有新迁移。
+
+顺带把侧边栏的 `Settings` 从单条链接改成了折叠组（与 Catalog / Inventory 同构）：
+原来的定价设置页 **URL 不变**，仍是 `/settings`，只是降级成组里的 `System Constants`
+子项。
+
+关于这个页面，有三件事是从界面上看不出来的：
+
+- **改这里是纠正某个地址 state 的唯一持久手段。** 见 3.2：手工改客户的 `state` 会在
+  下一次保存时被参考表覆盖。页面顶部把这句话写出来了。
+- **编辑不回溯。** 改完某一行，已有客户不会被重算——`standardize_customer_address`
+  是 BEFORE INSERT/UPDATE 触发器，只在那个客户下次被写入时才生效。要立刻铺开就得跑一次
+  集合式 UPDATE（`004` 第 1 段段尾那两条就是模板）。
+- **删除不会被拦，代价是静默的。** `customers` 没有 FK 指向这张表（地址是普通列），
+  所以删任何一行都会成功；之后该地区的客户查不到 state，函数按设计原样放行。确认弹窗里
+  写了这个后果，因为数据库不会提供任何提示。
+
+输入侧镜像了表上的三个 CHECK，避免用户看到 23505 / 23514 原始报错：邮编不足 4 位
+**自动补零**而不是拒绝（`800` → `0800`，见第 2 节——这正是源数据在 389 行上犯过的错），
+locality 自动转大写，state 是 8 个州的下拉框 + `None`（对应 136 行 alias locality 的
+NULL，实测全表 state 只有这 9 种取值）。
+
+---
+
+## 6. 尚未移植的部分
 
 xpros 的 `postcodes` 还被它自己的运费分区功能用着（`postcode_carrier_zones`、
 `preview_postcode_zones_import()`）。那套东西依赖 go2office 没有的承运商分区模型，
