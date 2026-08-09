@@ -21,6 +21,12 @@ const optionalText = (max: number, label: string) =>
 //                      never erase it (docs/orders-ui.md 4.3 decision B).
 //   customer_id     -- moving an order between customers also moves the address
 //                      it renders; out of scope for this round.
+//   posted_on_date  -- a record of when the parcel actually left, not a field
+//                      anyone should type. It is written by the dispatch action
+//                      (not built yet -- docs/orders-ui.md 13) and is read-only
+//                      everywhere in the UI. Note that re-adding it here is not
+//                      enough on its own to make it editable, and removing it
+//                      was not either: see the warning in updateOrder().
 export const orderUpdateSchema = z.object({
   // z.enum over the same constants the dropdowns iterate, so a value the DB
   // enum does not have cannot reach the cast.
@@ -34,16 +40,14 @@ export const orderUpdateSchema = z.object({
     .min(0, "Postage cannot be negative")
     .max(99999.99, "Postage is too large")
     .multipleOf(0.01, "Postage cannot have more than two decimal places"),
-  tracking_number: optionalText(100, "Tracking number"),
+  // 200, not 100: the field is normally filled by scanning the carrier label,
+  // and a raw GS1-128 scan runs to 117 characters here. The column is plain
+  // text and normalize_tracking_number() cuts the scan down to the article ID
+  // on write, so the only thing a 100-char cap achieved was rejecting the exact
+  // input the normalisation exists to handle.
+  tracking_number: optionalText(200, "Tracking number"),
   web_order_id: optionalText(100, "Web order ID"),
   comments: optionalText(2000, "Comments"),
-  // Null means not dispatched -- 4919 orders are in that state, and it is not
-  // the same thing as a status (4497 completed orders have no dispatch date).
-  posted_on_date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date")
-    .nullable()
-    .or(z.literal("")),
 })
 
 export type OrderUpdateInput = z.infer<typeof orderUpdateSchema>

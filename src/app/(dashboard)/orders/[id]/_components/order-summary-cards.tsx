@@ -11,7 +11,14 @@ import {
 import { displayShippingMethod } from "@/lib/orders/shipping-method"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { CustomerCardActions } from "./customer-card-actions"
 
 // Who, how and how much -- the three questions asked of an order before anyone
 // looks at its lines (docs/orders-ui.md 6.2).
@@ -52,6 +59,14 @@ export function OrderSummaryCards({ order }: { order: OrderDetail }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium">Customer</CardTitle>
+          {/* orders.customer_id is NOT NULL, so the actions always have a
+              customer to act on even when the embed came back empty. */}
+          <CardAction>
+            <CustomerCardActions
+              orderId={order.id}
+              customerId={order.customer_id}
+            />
+          </CardAction>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
           {customer ? (

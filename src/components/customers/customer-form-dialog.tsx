@@ -76,11 +76,16 @@ export function CustomerFormDialog({
   open,
   onOpenChange,
   customerId,
+  onCreated,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   // Absent for a new customer.
   customerId?: number
+  // Fires after a successful create, with the id createCustomer returns. The
+  // customer picker uses it to carry a just-created customer straight into the
+  // flow that opened the form; the list and detail pages ignore it.
+  onCreated?: (id: number) => void
 }) {
   const isEdit = customerId !== undefined
   const [isPending, startTransition] = React.useTransition()
@@ -120,16 +125,25 @@ export function CustomerFormDialog({
 
   function onSubmit(values: CustomerInput) {
     startTransition(async () => {
-      const result = isEdit
-        ? await updateCustomer(customerId, values)
-        : await createCustomer(values)
-
-      if (result.success) {
-        toast.success(isEdit ? "Customer updated" : "Customer created")
+      if (isEdit) {
+        const result = await updateCustomer(customerId, values)
+        if (!result.success) {
+          toast.error(result.error ?? "Something went wrong")
+          return
+        }
+        toast.success("Customer updated")
         onOpenChange(false)
-      } else {
-        toast.error(result.error ?? "Something went wrong")
+        return
       }
+
+      const result = await createCustomer(values)
+      if (!result.success || !result.data) {
+        toast.error(result.error ?? "Something went wrong")
+        return
+      }
+      toast.success("Customer created")
+      onOpenChange(false)
+      onCreated?.(result.data.id)
     })
   }
 

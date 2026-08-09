@@ -77,7 +77,6 @@ export function OrderEditDialog({
       tracking_number: order.tracking_number ?? "",
       web_order_id: order.web_order_id ?? "",
       comments: order.comments ?? "",
-      posted_on_date: order.posted_on_date ?? "",
     },
   })
 
@@ -91,7 +90,6 @@ export function OrderEditDialog({
         tracking_number: order.tracking_number ?? "",
         web_order_id: order.web_order_id ?? "",
         comments: order.comments ?? "",
-        posted_on_date: order.posted_on_date ?? "",
       })
     }
   }, [open, order, form])
@@ -121,9 +119,10 @@ export function OrderEditDialog({
           <DialogTitle>Edit order {order.invoice_number}</DialogTitle>
           <DialogDescription>
             {/* Said outright because it is the opposite of what people expect
-                from an order screen: marking an order dispatched here moves no
-                stock (docs/orders-ui.md 12). */}
-            Changing the status or dispatch date here does not move any stock.
+                from an order screen: moving an order to a shipped-looking
+                status here moves no stock (docs/orders-ui.md 12). */}
+            Changing the status here does not move any stock. The dispatch date
+            is set when the order is dispatched.
           </DialogDescription>
         </DialogHeader>
 
@@ -226,49 +225,27 @@ export function OrderEditDialog({
               )}
             />
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="tracking_number"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Tracking number</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder="Optional"
-                        {...field}
-                        value={field.value ?? ""}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="posted_on_date"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Dispatched on</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="date"
-                        {...field}
-                        value={field.value ?? ""}
-                        onChange={(event) =>
-                          field.onChange(event.target.value || null)
-                        }
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      Empty means not dispatched.
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+            {/* Full width, not half of a pair: this is usually filled by
+                scanning the carrier label, and a raw GS1-128 scan is over 100
+                characters before normalize_tracking_number() cuts it down on
+                write (docs/order-tracking-number.md). */}
+            <FormField
+              control={form.control}
+              name="tracking_number"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Tracking number</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="Optional"
+                      {...field}
+                      value={field.value ?? ""}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField

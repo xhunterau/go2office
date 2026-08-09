@@ -199,6 +199,9 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 | C | 分页方式 | 保留 OFFSET，不实现游标分页；**不提供"跳到最后一页"** | §3.4 实测第 5,000 页 60 ms。游标分页要重写筛选与 URL 状态，为一个不存在的问题引入的改动面反而更大 |
 | D | 未解析明细的可见性 | 除 §6.5 的展开区高亮外，**父交易行上也带 `Unresolved` 徽章** | §6.1 默认全部收起，只在展开区标记等于这 313 行在详情页永远看不见。父行标记是纯展示改动 |
 | E | 本轮边界 | 严格执行决策 1：不做修复队列、不做发货扣库存、不做金额排序 | 三项都涉及写库存或写历史明细，是本域风险最高的部分，留给下一轮单独验证 |
+| F | `posted_on_date` 能不能手输（2026-08-09 用户决定） | **不能**。从编辑表单移除，全站只读展示，改由将来的发货动作写入 | 它记录的是包裹实际离仓的时间，不是一个意见。手输意味着可以填一个从未发生过的日期，而 §4.2.1 已经证明发货状态与 status 是两个独立事实、没有第二处数据能交叉校验它。见下方「移除时的陷阱」 |
+
+**移除时的陷阱（已踩过）**：这个字段横跨 `orderUpdateSchema`（[validations/order.ts](../src/lib/validations/order.ts)）、`updateOrder` 的 update 负载（[actions/order.ts](../src/lib/actions/order.ts)）与对话框三处，**必须同一次全删**。只删表单字段的话，action 里的 `toNullable(parsed.data.posted_on_date)` 会变成 `toNullable(undefined)` = `null`——于是改一句备注、动一下状态，都会顺带把这张订单的发货日期清空，**全程不报错**。任何后续从 `orderUpdateSchema` 里下线的字段同理。
 
 ## 5. `/orders` 订单列表页
 
@@ -419,6 +422,29 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 ### 6.6 `is_auto_generated` 的显示
 
 迁移进来的 250,687 行全部是 `false`（= Laravel 的真实记录），trigger 生成的是 `true`。这个区别对运营是有意义的：`false` 意味着"这是当年实际发生的"，`true` 意味着"这是系统按 BOM 算出来的"。用一个安静的图标或 tooltip 表达，不用整列。
+
+### 6.7 客户卡片的 `Edit` / `Replace`（2026-08-09 补，移植自 xpros）
+
+Customer 卡片右上角两个按钮，对应"这张订单的客户"能出的两种问题：
+
+| 按钮 | 用途 | 实现 |
+|---|---|---|
+| `Edit` | 客户本身的资料写错了 | 直接复用 `src/components/customers/customer-form-dialog.tsx`（与 `/customers`、`/customers/[id]` 同一个对话框） |
+| `Replace` | 订单挂错了人 | `customer-picker-dialog.tsx` 搜索/新建 → `useConfirm` → `replaceOrderCustomer` |
+
+**两个按钮的区别必须在文案里说清。** `Edit` 改的是客户，会波及该客户名下**所有**订单显示的姓名与地址（§6.3、§7.3）；`Replace` 只改这一张订单的归属。用户想修一个错别字却点了 `Replace`，结果是把订单挂到别人名下——所以确认框里写了 "To correct a typo instead, use Edit."
+
+**替换不做审计**（用户决定，2026-08-09）：本库没有 `order_logs` 一类的表，xpros 那两处 `order_logs` insert 无处可落。这意味着"谁在什么时候换掉了这张订单的客户"没有任何痕迹。要补就是单开一张表 + 迁移的事。
+
+**不限制订单状态**（用户决定）：已完成/已取消的订单同样可以替换。历史订单纠错正是这个功能的主要用途，按状态封锁会把它挡在门外。
+
+三处实现上的取舍：
+
+1. **搜索走 `fetchCustomerList`，不另写查询。** picker 的三个搜索框（Customer / Suburb / Postcode）与 `/customers` 的筛选栏是同一套口径与同一批 trgm 索引（§8.1）。`searchCustomers` action 只是套一层分页壳。另写一份 `ilike` 的代价不是性能，是两处对"怎么算找到一个客户"的定义会慢慢分叉。
+2. **"下一页"看本页是否满，不看 count。** 列表的 `count: "estimated"`（§3.1）在页级别没有意义。
+3. **`customer_id` 的改动不会触发 `order_metrics_summary` 重算。** `trg_oms_orders` 的 UPDATE 分支只比较 `postage_and_handling` / `discount` / `postage_paid` 三列（`docs/order-metrics.md`），所以替换客户就是一次纯 UPDATE。
+
+`replaceOrderCustomer` 放在 `src/lib/actions/order.ts` 而不是并入 `updateOrder`：`updateOrder` 写的是订单自己的列，最坏结果是一个错的运单号；`customer_id` 是指向另一张表的指针，改它会同时重写页面上的收件人与地址，并把订单从一个客户的历史里挪到另一个客户名下。它也在服务端挡掉"换成当前这个客户"——那会是一次报成功但什么都没变的写入。
 
 ## 7. `/customers` 与 `/customers/[id]`
 
@@ -679,7 +705,8 @@ ANALYZE public.order_items;
 
 - **订单录入通道不存在**：Laravel 停用后，eBay / Shopify 的订单**目前没有任何进入新系统的路径**。本轮做的是"管理已有订单"，不是"接单"。同步/导入需要单独一轮（按规则 4，属于 Trigger.dev 的活）。这是整个 orders 域上线前的硬阻塞，本文档只负责记录它。
 - **历史订单不能补扣库存**：`inventory_movements` 从迁移那天起账（`docs/inventory-ui.md` §9），203,315 张历史订单没有对应流水。下一轮做发货联动时必须限定为"从此以后新发的货"，且要有明确的界面/文案区分，否则会出现"这张 2019 年的订单为什么不扣库存"的困惑。
-- **本轮的订单编辑不影响库存**：改 status、打勾发货，库存数字都不会动（决策 1 把联动推到下一轮）。这件事要让用户知道，否则会以为系统在背后扣了。
+- **本轮的订单编辑不影响库存**：改 status 库存数字不会动（决策 1 把联动推到下一轮）。这件事要让用户知道，否则会以为系统在背后扣了。
+- **目前没有任何地方写入 `posted_on_date`**：决策 F 把它从编辑表单移除后，发货日期变成纯只读，而写它的发货动作还没做（§13）。直接后果是 §4.2.1 里那 9 张 Laravel 停机时卡住的 `processing` 在途单，上线后**无法标记为已发货**——这是已知且接受的临时状态，做发货动作时一并解决。
 - **深翻页**：`OFFSET 100000` 在 Postgres 上是真的把前 10 万行数过去。20 万行、每页 20 条 = 10,164 页。实测 60 ms（§3.4），在预算内，所以保留 OFFSET；但**分页组件仍不提供"跳到最后一页"**——省掉一个一键触发最坏情况的入口，成本为零。
 - **每个页面查询的预算是 8 秒**（`authenticated` 角色的 `statement_timeout`，§3.4）。超时的表现是查询直接报错、不是变慢。离这条线最近的是 SKU 反查（§5.3），而它对统计信息的新鲜度敏感。
 - **统计信息陈旧是本域的系统性风险**：`ANALYZE` 前后 SKU 反查差 390 倍、深翻页差 54 倍、估算计数差 21%（§3.4）。迁移末尾会跑一次，但上线后大量写入时 autovacuum 未必跟得上。任何"订单页突然变慢"的报障，第一步查 `pg_stat_user_tables.last_autoanalyze`。

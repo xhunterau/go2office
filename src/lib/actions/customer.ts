@@ -10,7 +10,10 @@ import {
 import {
   countCustomerOrders,
   fetchCustomerDetail,
+  fetchCustomerList,
+  CUSTOMERS_PAGE_SIZE,
   type CustomerDetail,
+  type CustomerListRow,
 } from "@/lib/queries/customers"
 import { createClient } from "@/lib/supabase/server"
 import { customerSchema, type CustomerInput } from "@/lib/validations/customer"
@@ -77,6 +80,60 @@ export async function loadCustomer(
   if (error) return { success: false, error }
   if (!customer) return { success: false, error: "Customer not found" }
   return { success: true, data: customer }
+}
+
+export type CustomerSearchInput = {
+  // Matched against full_name, email and platform_user_id together, exactly as
+  // the /customers search box does.
+  name?: string
+  suburb?: string
+  postcode?: string
+  page?: number
+}
+
+export type CustomerSearchResult = {
+  rows: CustomerListRow[]
+  page: number
+  hasMore: boolean
+}
+
+// Customer lookup for a picker -- currently the order detail page's "replace
+// customer" dialog.
+//
+// Delegates to fetchCustomerList instead of issuing its own query. That
+// function already encodes what "find a customer" means here (one box across
+// name/email/eBay username, fuzzy suburb, prefix-matched postcode) and which of
+// those the trigram indexes can actually serve; a second definition would drift
+// from the list page's within a round or two (project rule 5).
+export async function searchCustomers(
+  input: CustomerSearchInput
+): Promise<ActionResult<CustomerSearchResult>> {
+  const page =
+    Number.isInteger(input.page) && (input.page as number) > 0
+      ? (input.page as number)
+      : 1
+
+  const supabase = await createClient()
+  const { rows, error } = await fetchCustomerList(supabase, {
+    name: toNullable(input.name),
+    suburb: toNullable(input.suburb),
+    postcode: toNullable(input.postcode),
+    // Every customer is a candidate. The list page's hasOrders switch exists to
+    // hide the 1790 rows nobody has bought from, and putting one of them on an
+    // order is precisely how a row leaves that group.
+    hasOrders: false,
+    page,
+  })
+
+  if (error) return { success: false, error }
+
+  // fetchCustomerList's count is `estimated` -- fine for "about 178k customers"
+  // on a list page, useless for deciding whether a next page exists. Whether
+  // this page came back full answers that exactly.
+  return {
+    success: true,
+    data: { rows, page, hasMore: rows.length === CUSTOMERS_PAGE_SIZE },
+  }
 }
 
 export async function createCustomer(

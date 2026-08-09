@@ -114,9 +114,20 @@
 - **严禁移植 xpros 的零售价美化**：xpros 同名函数的模块 2 在写入时做 `CEIL(x+0.01) - 0.05`，与本项目的 `floor(x) + 0.95` **不是同一个规则**，且本项目已有规则 17 管理的双实现。加进来会变成三实现，并在用户保存时静默改掉刚输入的价格。
 
 # 20. 运单号归一化（normalize_tracking_number）
-- **不变量**：`public.orders` 上的 `orders_normalize_tracking_insert` / `_update` 两个触发器（迁移 `20260808210000`）保证 `tracking_number` 存的是承运商 article ID，而不是条码枪扫出来的 GS1-128 全串。函数 `public.normalize_tracking_number(text)` 幂等，找不到规则时**原样返回**。详见 `docs/order-tracking-number.md`。
-- **规则表按前缀而非 `shipping_method` 分支**：`33GLH`（在用）/ `33HKT`（已停用，留着只为修 3,026 行历史）截 12 位，`TMP` / `RPP` 截 25 位，`99` 截 23 位。**新增承运商或换 eParcel charge account 时必须加对应分支**，否则新单的运单号会以 41～74 字符的原始条码串入库——承运商官网不认、订单页读不出，且**不报任何错**。严禁照抄 xpros 的 `S8P` / `33RCA` / `34HA9` / `34HAA` 常量，那是 xpros 自己的账号前缀，在本库 0 命中。
+- **不变量**：`public.orders` 上的 `orders_normalize_tracking_insert` / `_update` 两个触发器（迁移 `20260808210000`，函数由 `20260809100000` 修正）保证 `tracking_number` 存的是承运商 article ID，而不是条码枪扫出来的 GS1-128 全串。函数 `public.normalize_tracking_number(text)` 幂等，找不到规则时**原样返回**。详见 `docs/order-tracking-number.md`。
+- **规则表按前缀而非 `shipping_method` 分支**：`33GLH`（在用）/ `33HKT`（已停用，留着只为修约 6,000 行历史）截 12 位，`TMP` / `RPP` 截 25 位，`99` 截 23 位。**新增承运商或换 eParcel charge account 时必须加对应分支**，否则新单的运单号会以 41～74 字符的原始条码串入库——承运商官网不认、订单页读不出，且**不报任何错**。严禁照抄 xpros 的 `S8P` / `33RCA` / `34HA9` / `34HAA` 常量，那是 xpros 自己的账号前缀，在本库 0 命中。
+- **前缀用 `STRPOS` 在任意位置定位，只有 `99` 例外**：字母前缀（`33GLH` / `33HKT` / `TMP` / `RPP`）直接 `STRPOS` 找到就从该位置截，**不要求串里存在 GS1-128 信封**——这是 xpros 的原机制。初版（`20260808210000`）把「先找到 `01[0-9]{14}91` 信封」当成了入口条件，导致只抓到 AI(91) 之后那段的扫码（`33GLH003571701000930809`，前缀就在第 1 位）被**静默原样放行**，190 行受影响。`20260809100000` 已改回 `STRPOS`。**新增前缀时照此办理**。唯一的例外是 MyPost 的 `99`：它是两位数字不是独特 token，`STRPOS(x,'99')` 会在任何碰巧含 `99` 的号码中间乱截，所以该族必须保留信封判断 + 锚定串首的兜底，**不可统一成 `STRPOS`**。
 - **`004` 必须关掉它并内联调用（两半都不可删）**：这两个触发器是**行级**的，灌 203,315 行订单就是真触发 203,315 次，所以 `004` 第 2 段 `DISABLE` 它们、在 `SELECT` 里内联 `public.normalize_tracking_number(o.tracking_number)`、段尾再 `ENABLE`。只删 `DISABLE` 是慢；**只删内联调用则会静默导入 27,709 行原始扫码输出**。
 - **列对列 diff 必须两侧都套函数**：`004` 诊断 7 与 `run-all.mjs` 的「orders — field-by-field against the source」比对 `tracking_number` 时，源侧要套上同一个函数，否则一次正确的导入会报出五位数 mismatch（与规则 15 里 `001` 的商品行是同一类陷阱）。
 - **校验查幂等，不查「还有没有条码串」**：353 行因没有对应规则而合法保留信封，用 `~ '01[0-9]{14}91'` 断言为 0 会让检查永远失败。正确写法是 `tracking_number IS DISTINCT FROM public.normalize_tracking_number(tracking_number)` 计数为 0。
 
+
+# 21. 客户地址标准化（standardize_customer_address）
+- **不变量**：`public.customers` 上的 `customers_standardize_address` BEFORE INSERT/UPDATE 触发器（迁移 `20260809130000`，移植自 xpros 的 `fn_standardize_customer_address`）保证两件事：`country` 是 ISO 3166-1 alpha-2 代码（`Australia` → `AU`）；`state` 由 `postcode` + `city` 反查 `public.postcodes` 得出。参考表见迁移 `20260809110000`（postcodes，16,712 行）与 `20260809120000`（countries，7 行）。查不到时**一律原样不动**——这是它在脏数据上安全的前提（`country` 列里合法地存着电话号码和送货备注）。详见 `docs/customer-address-standardisation.md`。
+- **`postcodes.postcode` 永远是 4 位，由 CHECK 强制**：xpros 源数据有 389 行丢了前导零（DARWIN 存成 `800`），而本库 `customers.postcode` 有 1,283 行是正确的 `0800` 形式。照搬源值会让这些客户**永远查不到 state 且不报错**。函数查询时对客户侧同样做 `lpad(...,4,'0')`。**新增邮编行必须补零**。
+- **它覆盖已有的 `state`，不只是填空**：客户编辑表单提交全部字段，所以**手工填的 state 在保存时会被参考表覆盖**（只要 postcode + suburb 能解析）。`(postcode, locality)` 唯一，答案确定、不存在瞎猜。要让某个地址用与澳洲邮政矛盾的 state，只能改 `public.postcodes` 的行——手工编辑会被下一次保存悄悄撤销。与规则 19 的 `name` initcap 是同一类静默改写。
+- **严禁用 `ILIKE` 匹配 locality / country_name**：xpros 原版写的是 `locality ILIKE TRIM(NEW.city)`，右侧是**模式**不是字面量，city 里含 `%` 或 `_` 会变通配符匹配、把别的郊区的 state 安到客户头上。当前库里 0 行含这两个字符，所以这个 bug 会潜伏很久。本项目用等值比较（且只有等值能走索引）。
+- **参考数据修了 3 个源值，另有 3 行故意不修**：`2765 GABLES` 在 xpros 里标 VIC（Gables 是悉尼西北郊区，同邮编另外 10 行全是 NSW），照搬会把 10 个真实 NSW 客户搬去维州；`countries` 的 Japan 从 `JPN`、South Korea 从 `SKN` 改成 `JP` / `KR`。但 `3691 LAKE HUME VILLAGE` / `3707 BRINGENBRONG` / `4385 CAMP CREEK` 标 NSW 是**正确的**——边境小镇确实用邻州邮编。**「state 与本邮编多数派不一致」不构成错误证据**，严禁写脚本批量「修正」这类行。
+- **`004` 必须关掉它并在段尾做集合式标准化（两半都不可删）**：这个触发器是**行级**的，灌 178,024 行客户就是真触发 17.8 万次，所以 `004` 第 1 段 `DISABLE` 它、段尾用两条集合式 `UPDATE` 做同样的事、再 `ENABLE`（同一事务内）。只删 `DISABLE` 是慢；**只删那两条 UPDATE 则是静默的**——76,363 个客户带着 `Australia` 入库、与 101,644 行的 `AU` 并存，之后按国家分组会把一个国家算成两个。诊断 11 与 `run-all.mjs` 的 `ADDRESS CHECK` 是唯一的事后检验。
+- **列对列 diff 不能再比 `state` / `country`**：`004` 诊断 7 与 `run-all.mjs` 的 customers 地址检查已改为只比对街道行、`city`、`postcode`。继续比对被标准化的两列，会让一次正确的导入报出五位数 mismatch（与规则 15 的 `001` 商品行、规则 20 的运单号是同一类陷阱）。
+- **校验查幂等，不查「是不是都成 ISO 代码了」**：`country` 列合法地存着非国家名的脏值，用「有多少行不是 ISO 代码」断言为 0 会让检查永远失败。正确写法是只 JOIN 参考表能解析的行，断言它们已在不动点上。

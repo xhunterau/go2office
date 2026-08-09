@@ -432,6 +432,63 @@ export type Database = {
       }
       // Orders domain (migrations 20260803100000-20260803160000).
       // See docs/orders-domain-migration.md.
+      postcodes: {
+        Row: {
+          id: number
+          // Always four digits, zero-padded (NT is 08xx, ACT 02xx). Text, not a
+          // number, precisely so those leading zeros survive.
+          postcode: string
+          // Uppercase. Matched against upper(customers.city) by
+          // standardize_customer_address().
+          locality: string
+          // Null on 136 alias localities that Australia Post lists without one.
+          state: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          postcode: string
+          locality: string
+          state?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          postcode?: string
+          locality?: string
+          state?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      countries: {
+        Row: {
+          id: number
+          country_name: string
+          // ISO 3166-1 alpha-2, enforced by a CHECK constraint.
+          country_code: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          country_name: string
+          country_code: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          country_name?: string
+          country_code?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           id: number
@@ -443,9 +500,14 @@ export type Database = {
           // The customer's CURRENT address, taken from their most recent order.
           // Orders do not keep their own copy, so an order placed before the
           // customer moved renders against this address (8150 orders are in
-          // that position). Migrated verbatim: NSW and New South Wales both
-          // occur, and address_line3 holds an `ebay:xxxx` reference code on
+          // that position). address_line3 holds an `ebay:xxxx` reference code on
           // ~129k rows rather than an address line.
+          //
+          // `state` and `country` are NOT verbatim: the
+          // customers_standardize_address trigger (migration 20260809130000)
+          // rewrites country to its ISO code and derives state from
+          // postcode + city on every insert and update. The other address
+          // fields are still exactly what the legacy data carried.
           company_name: string | null
           address_line1: string | null
           address_line2: string | null

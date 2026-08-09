@@ -78,6 +78,18 @@ BEGIN;
 -- reverted automatically at COMMIT.
 SET LOCAL statement_timeout = 0;
 
+-- customers_standardize_address (migration 20260809130000) is a ROW-level
+-- trigger: leaving it on means 178024 separate pairs of index lookups against
+-- postcodes and countries during the INSERT. It is disabled here and the same
+-- work is done set-based at the end of this section, before COMMIT.
+--
+-- BOTH HALVES ARE LOAD-BEARING. Dropping the DISABLE only makes the import
+-- slow. Dropping the two UPDATEs at the end is silent: every customer imports
+-- with the legacy country spelling ('Australia' on 76363 rows, alongside 'AU'
+-- on 101644) and whatever state the legacy row happened to carry, and nothing
+-- ever puts it right. Diagnostic 11 at the foot of this file is the check.
+ALTER TABLE public.customers DISABLE TRIGGER customers_standardize_address;
+
 WITH keyed AS (
   SELECT
     b.id,
@@ -146,10 +158,13 @@ SELECT
   -- across 5483 customers are in that position. Accepted by decision; see
   -- docs/orders-domain-migration.md section 13.
   --
-  -- Migrated verbatim, with no normalisation: the legacy data mixes NSW with
-  -- New South Wales and AU with Australia. buyer_address_3 holds an eBay
+  -- The street lines are migrated verbatim: buyer_address_3 holds an eBay
   -- reference code (`ebay:xxxx`) on 129276 rows rather than an address line,
   -- and is kept as-is by explicit decision.
+  --
+  -- state and country are NOT verbatim. The legacy data mixes NSW with New
+  -- South Wales and AU with Australia; both columns are standardised by the two
+  -- UPDATEs at the end of this section (see the DISABLE TRIGGER note above).
   l.company_name,
   l.buyer_address_1,
   l.buyer_address_2,
@@ -176,6 +191,28 @@ ON CONFLICT (id) DO UPDATE SET
   state = EXCLUDED.state,
   postcode = EXCLUDED.postcode,
   country = EXCLUDED.country;
+
+-- The set-based equivalent of customers_standardize_address, replacing the
+-- per-row trigger disabled above. Same two rules, same reference tables, same
+-- conservative behaviour: a value the reference tables cannot resolve is left
+-- exactly as the legacy system had it.
+UPDATE public.customers AS c
+SET country = ct.country_code
+FROM public.countries AS ct
+WHERE lower(btrim(c.country)) = lower(ct.country_name)
+  AND c.country IS DISTINCT FROM ct.country_code;
+
+-- postcodes stores four digits always, so the customer's value is padded to
+-- match -- otherwise every Darwin and Canberra address fails to resolve.
+UPDATE public.customers AS c
+SET state = p.state
+FROM public.postcodes AS p
+WHERE p.postcode = lpad(btrim(c.postcode), 4, '0')
+  AND p.locality = upper(btrim(c.city))
+  AND p.state IS NOT NULL
+  AND c.state IS DISTINCT FROM p.state;
+
+ALTER TABLE public.customers ENABLE TRIGGER customers_standardize_address;
 
 COMMIT;
 
@@ -648,7 +685,14 @@ COMMIT;
 --       (SELECT COALESCE(sum(t.postage_and_handling), 0) FROM public.go2_transactions t WHERE t.order_id = o.id);
 --
 --    Customer address check (expected: 0). Each customer must carry the address
---    from the highest-id go2_buyers row in their dedup group:
+--    from the highest-id go2_buyers row in their dedup group.
+--
+--    Note state and country are NOT compared raw, for the same reason as
+--    tracking_number above: section 1 standardises them, so ~76k country rows
+--    and a large number of state rows legitimately differ from the source.
+--    Comparing them raw would report a five-figure mismatch count on a correct
+--    import. They are checked by diagnostic 11 instead, which asks the question
+--    that still means something -- are they at the standardiser's fixed point?
 --
 -- WITH keyed AS (
 --   SELECT b.*, COALESCE(NULLIF(lower(btrim(b.buyer_userid)),''),
@@ -661,9 +705,7 @@ COMMIT;
 -- FROM grouped g JOIN latest l USING (dk) JOIN public.customers c ON c.id = g.cid
 -- WHERE c.address_line1 IS DISTINCT FROM l.buyer_address_1
 --    OR c.city IS DISTINCT FROM l.buyer_city
---    OR c.state IS DISTINCT FROM l.buyer_state
---    OR c.postcode IS DISTINCT FROM l.buyer_postcode
---    OR c.country IS DISTINCT FROM l.buyer_country;
+--    OR c.postcode IS DISTINCT FROM l.buyer_postcode;
 --
 -- SELECT count(*) AS transaction_mismatches
 -- FROM public.go2_transactions t JOIN public.order_transactions n ON n.id = t.id
@@ -732,3 +774,29 @@ COMMIT;
 -- FROM public.orders
 -- WHERE length(tracking_number) > 25
 -- GROUP BY 1 ORDER BY 2 DESC;
+--
+-- 11. !! The address standardisation check !! Every customer must already be at
+--     standardize_customer_address()'s fixed point (expected: 0 and 0). Anything
+--     above zero means section 1 ran with the trigger disabled but WITHOUT the
+--     two set-based UPDATEs that replace it. Like the tracking check above, the
+--     import stays green either way -- the damage is that 76363 customers keep
+--     'Australia' where the rest of the table says 'AU', so any grouping or
+--     filtering by country silently splits one country into two.
+--
+-- SELECT count(*) AS unstandardised_country
+-- FROM public.customers c
+-- JOIN public.countries ct ON lower(ct.country_name) = lower(btrim(c.country))
+-- WHERE c.country IS DISTINCT FROM ct.country_code;
+--
+-- SELECT count(*) AS unstandardised_state
+-- FROM public.customers c
+-- JOIN public.postcodes p
+--   ON p.postcode = lpad(btrim(c.postcode), 4, '0')
+--  AND p.locality = upper(btrim(c.city))
+-- WHERE p.state IS NOT NULL AND c.state IS DISTINCT FROM p.state;
+--
+--     Both are written as joins that only look at rows the reference tables can
+--     resolve. Asking "how many customers have a non-ISO country?" instead would
+--     flag the junk this column carries (phone numbers, delivery instructions)
+--     forever -- those rows are deliberately left alone, and a check that never
+--     reaches zero is a check everyone learns to skip.

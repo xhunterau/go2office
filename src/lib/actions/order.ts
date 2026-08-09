@@ -110,13 +110,80 @@ export async function updateOrder(
       tracking_number: toNullable(parsed.data.tracking_number),
       web_order_id: toNullable(parsed.data.web_order_id),
       comments: toNullable(parsed.data.comments),
-      posted_on_date: toNullable(parsed.data.posted_on_date),
+      // posted_on_date is deliberately not in this list, and the omission is
+      // load-bearing rather than cosmetic. It used to be here as
+      // `toNullable(parsed.data.posted_on_date)`; once the form stopped
+      // submitting the field that expression became toNullable(undefined),
+      // which is null -- so every unrelated edit (a comment, a status) would
+      // have silently cleared the dispatch date of the order being saved. Any
+      // future field dropped from orderUpdateSchema has to be removed from
+      // here in the same change for the same reason.
     })
     .eq("id", id)
 
   if (error) return { success: false, error: messageFor(error) }
 
   revalidateOrder(id)
+  return { success: true }
+}
+
+// Move an order onto a different customer.
+//
+// Deliberately not a field of updateOrder. That action writes the order's own
+// columns, where the worst case is a wrong tracking number; customer_id is a
+// pointer at another table and moving it rewrites what the whole page says about
+// who this went to -- recipient AND address, because orders keep no address of
+// their own and render the customer's current one (docs/orders-ui.md 6.3). It
+// also moves the order out of one customer's history and into another's.
+//
+// Cheap in spite of order_metrics_summary: trg_oms_orders narrows UPDATEs to
+// postage_and_handling, discount and postage_paid, so this recomputes nothing.
+export async function replaceOrderCustomer(
+  orderId: number,
+  customerId: number
+): Promise<ActionResult> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    return { success: false, error: "Invalid customer" }
+  }
+
+  const supabase = await createClient()
+
+  // Read the current owner first. Writing the value it already holds would
+  // report success and change nothing, which reads as the feature being broken.
+  const { data: order, error: readError } = await supabase
+    .from("orders")
+    .select("customer_id")
+    .eq("id", orderId)
+    .maybeSingle()
+
+  if (readError) return { success: false, error: readError.message }
+  if (!order) return { success: false, error: "Order not found" }
+  if (order.customer_id === customerId) {
+    return {
+      success: false,
+      error: "This order already belongs to that customer.",
+    }
+  }
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ customer_id: customerId })
+    .eq("id", orderId)
+
+  if (error) {
+    // customer_id is NOT NULL behind orders_customer_id_fkey, so in practice the
+    // one way this fails is the customer having been deleted between the
+    // picker's search and this save.
+    if (isForeignKeyViolation(error)) {
+      return { success: false, error: "That customer no longer exists." }
+    }
+    return { success: false, error: messageFor(error) }
+  }
+
+  revalidateOrder(orderId)
   return { success: true }
 }
 

@@ -7,6 +7,7 @@ import { toast } from "sonner"
 
 import type { CustomerListRow } from "@/lib/queries/customers"
 import { deleteCustomer } from "@/lib/actions/customer"
+import { customerDisplayName } from "@/lib/customers/display-name"
 import { useConfirm } from "@/components/providers/confirm-provider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -28,19 +29,6 @@ import {
 import { CustomerFormDialog } from "@/components/customers/customer-form-dialog"
 
 const COLUMN_COUNT = 7
-
-// A customer is identified by whichever of the three they have: 20347 rows have
-// no eBay username, and the deduplication that produced this table keyed on
-// username falling back to email (docs/orders-domain-migration.md 4.2).
-export function customerDisplayName(customer: {
-  full_name: string | null
-  platform_user_id: string | null
-  email: string | null
-}): string {
-  return (
-    customer.full_name ?? customer.platform_user_id ?? customer.email ?? "—"
-  )
-}
 
 export function CustomersTable({ rows }: { rows: CustomerListRow[] }) {
   const confirm = useConfirm()

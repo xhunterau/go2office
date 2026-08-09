@@ -187,6 +187,55 @@ const CHECKS = [
     expect: '0',
   },
   {
+    // 004 disables customers_standardize_address and does the same work with two
+    // set-based UPDATEs instead. Nothing puts the values right if those UPDATEs
+    // are ever dropped, and the import stays green either way — the table just
+    // ends up holding 'Australia' and 'AU' as if they were different countries.
+    name: 'ADDRESS CHECK — customers standardised',
+    critical: true,
+    // Idempotency against the reference tables, not "every country is an ISO
+    // code". The column also holds phone numbers and delivery instructions that
+    // no reference row resolves; those are deliberately left alone, so a
+    // stricter test would never reach zero and would train everyone to ignore
+    // this check.
+    sql: `SELECT
+            (SELECT count(*) FROM public.customers c
+             JOIN public.countries ct ON lower(ct.country_name) = lower(btrim(c.country))
+             WHERE c.country IS DISTINCT FROM ct.country_code)::int AS bad_country,
+            (SELECT count(*) FROM public.customers c
+             JOIN public.postcodes p
+               ON p.postcode = lpad(btrim(c.postcode), 4, '0')
+              AND p.locality = upper(btrim(c.city))
+             WHERE p.state IS NOT NULL AND c.state IS DISTINCT FROM p.state)::int AS bad_state`,
+    assert: (r) => r.bad_country === 0 && r.bad_state === 0,
+    expect: '0 / 0',
+    onFail:
+      'Section 1 of 004 ran without its two standardisation UPDATEs while the\n' +
+      '      trigger was disabled. Re-run 004, or repair in place with:\n' +
+      '      UPDATE public.customers c SET country = ct.country_code\n' +
+      '        FROM public.countries ct\n' +
+      '       WHERE lower(btrim(c.country)) = lower(ct.country_name)\n' +
+      '         AND c.country IS DISTINCT FROM ct.country_code;\n' +
+      '      UPDATE public.customers c SET state = p.state\n' +
+      '        FROM public.postcodes p\n' +
+      '       WHERE p.postcode = lpad(btrim(c.postcode), 4, \'0\')\n' +
+      '         AND p.locality = upper(btrim(c.city))\n' +
+      '         AND p.state IS NOT NULL AND c.state IS DISTINCT FROM p.state;',
+  },
+  {
+    // Informational: how much the standardiser actually resolves. A collapse
+    // here means the reference tables did not get migrated, or customers.city
+    // stopped holding suburb names.
+    name: 'customers whose state the postcode table can vouch for',
+    sql: `SELECT count(*)::int AS resolved,
+                 (SELECT count(*) FROM public.customers)::int AS total
+          FROM public.customers c
+          JOIN public.postcodes p
+            ON p.postcode = lpad(btrim(c.postcode), 4, '0')
+           AND p.locality = upper(btrim(c.city))
+          WHERE p.state IS NOT NULL`,
+  },
+  {
     name: 'orders.postage_and_handling — rolled up from the source lines',
     // Aggregate once and join, rather than a correlated subquery per order: the
     // go2_* temp tables carry no indexes at all, so the correlated form scans
