@@ -47,6 +47,26 @@ export function formatDimensionsMm(
   return `${parts.join(" × ")} mm`
 }
 
+// Capitalises the first letter of every word and lowers the rest. Hyphenated
+// parts count as words, so Timor-Leste survives.
+//
+// This is a suggestion rather than a rule, and the distinction is the whole
+// point: it is applied on blur in the country form and never inside a Zod
+// schema, because it gets real names wrong -- "Bosnia and Herzegovina" comes
+// back as "Bosnia And Herzegovina" -- and the user has to be able to type the
+// correct form and keep it. Nothing downstream depends on the casing:
+// standardize_customer_address() matches on lower(country_name), so this is
+// display only.
+export function titleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(
+      /(^|[\s-])(\p{L})/gu,
+      (_match, boundary: string, letter: string) =>
+        boundary + letter.toUpperCase()
+    )
+}
+
 // Date only, no time. orders.created_at is a timestamp, but the legacy system
 // stored no time component, so every migrated order reads 00:00 -- showing it
 // would be showing a fact that is not there.

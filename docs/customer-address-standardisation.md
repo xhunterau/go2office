@@ -176,6 +176,37 @@ NULL，实测全表 state 只有这 9 种取值）。
 
 ---
 
+## 5.1 `/settings/countries`
+
+侧边栏 `Settings → Countries`。同样没有新迁移——`20260809120000` 的 RLS 与 GRANT 已经
+给 `authenticated` 开了全量权限。
+
+与 postcodes 页面的三处刻意差异：
+
+- **没有分页也没有筛选栏。** 7 行。加一排筛选框是让读者先看过一层控件才够到数据。
+  真长到一屏以上再说。
+- **两个字段的规范化不对称。** `country_code` 由 zod 强制大写（表上的
+  `countries_code_format` CHECK 只收 `^[A-Z]{2}$`，没有别的形式可保留）；
+  **`country_name` 不做强制**，只在输入框失焦时用 `titleCase()`（`src/lib/format.ts`）
+  给个建议，用户可以改回去。理由是函数查这张表用的是
+  `lower(c.country_name) = lower(btrim(NEW.country))`（第 1 节），**大小写不影响匹配**，
+  纯显示层；而 naive initcap 会把 `Bosnia and Herzegovina` 写成
+  `Bosnia And Herzegovina`，强制就等于让用户永远存不下正确拼写。这是规则 19 那类静默
+  改写的反面教材，与规则 17 的 Retail Price 失焦收敛同型。
+- **改 `country_code` 会弹确认框，改名字不会。** 这是本页唯一有后果的编辑，而后果在
+  页面上看不见：不回溯，存量 101,644 行客户仍带旧代码、新写入用新代码，**同一个国家从此
+  两个代码并存**——正是这张表当初要消灭的 `AU` / `Australia` 分裂的翻版。改名字没有对应
+  代价，因为匹配两侧都套了 `lower()`。
+
+两个唯一约束的报错要分开翻译：`countries_code_unique`（代码重复）与
+`countries_country_name_key`（**`lower(country_name)` 上的唯一索引**）。后者的文案必须
+点明「匹配忽略大小写」，否则用户下一步一定是改个大小写再提交一次。
+
+删除与 postcodes 同型：没有 FK 拦得住，删完之后该国客户的 `country` 按输入原样入库，
+两种拼法重新开始累积。确认弹窗写了这一条。
+
+---
+
 ## 6. 尚未移植的部分
 
 xpros 的 `postcodes` 还被它自己的运费分区功能用着（`postcode_carrier_zones`、

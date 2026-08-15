@@ -49,6 +49,7 @@ const inventoryItems = [
 const settingsItems = [
   { title: "System Constants", href: "/settings" },
   { title: "Postcodes", href: "/settings/postcodes" },
+  { title: "Countries", href: "/settings/countries" },
 ]
 
 const navItems = [
