@@ -489,6 +489,429 @@ export type Database = {
         }
         Relationships: []
       }
+      carriers: {
+        Row: {
+          id: number
+          // Lowercase, unique, and CHECK-enforced: this is the key
+          // CARRIER_CAPABILITIES looks a carrier's weight and size limits up by.
+          // Rename in `name`, never here.
+          code: string
+          name: string
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          code: string
+          name: string
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          code?: string
+          name?: string
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      carrier_services: {
+        Row: {
+          id: number
+          carrier_id: number
+          // Lowercase on both this and carrier_dispatch_options.service_type, so
+          // the join between them needs no case folding.
+          service_type: string
+          size_label: string
+          // Null marks the per-kg overflow tier, which applies above every fixed
+          // tier. MyPost has none -- it stops at 5kg.
+          max_weight: number | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          carrier_id: number
+          service_type: string
+          size_label: string
+          max_weight?: number | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          carrier_id?: number
+          service_type?: string
+          size_label?: string
+          max_weight?: number | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "carrier_services_carrier_id_fkey"
+            columns: ["carrier_id"]
+            isOneToOne: false
+            referencedRelation: "carriers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      carrier_zone_rates: {
+        Row: {
+          id: number
+          service_id: number
+          zone: string
+          // Fixed tiers price off `rate`; the per_kg tier off base_rate +
+          // per_kg_rate, floored at min_charge. A CHECK constraint requires one
+          // of the two -- a row with neither would quote $0 and win.
+          rate: number | null
+          base_rate: number | null
+          per_kg_rate: number | null
+          // Null on all 138 seeded rows; the column exists because the rate
+          // lookup honours it, not because this contract sets one.
+          min_charge: number | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          service_id: number
+          zone: string
+          rate?: number | null
+          base_rate?: number | null
+          per_kg_rate?: number | null
+          min_charge?: number | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          service_id?: number
+          zone?: string
+          rate?: number | null
+          base_rate?: number | null
+          per_kg_rate?: number | null
+          min_charge?: number | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "carrier_zone_rates_service_id_fkey"
+            columns: ["service_id"]
+            isOneToOne: false
+            referencedRelation: "carrier_services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      carrier_dispatch_options: {
+        Row: {
+          id: number
+          shipping_method: Database["public"]["Enums"]["shipping_method"]
+          carrier_id: number
+          billing_weight_mode: string
+          // Joins to carrier_services.service_type. Null for carriers that do
+          // not read the rate card at all (aramex, reg_letter).
+          service_type: string | null
+          // Non-null short-circuits everything: no zone lookup, no rate card.
+          // Only Register_Letter has one.
+          fixed_price_aud: number | null
+          max_order_total_aud: number | null
+          max_packed_thickness_mm: number | null
+          max_packed_length_mm: number | null
+          max_packed_width_mm: number | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          shipping_method: Database["public"]["Enums"]["shipping_method"]
+          carrier_id: number
+          billing_weight_mode?: string
+          service_type?: string | null
+          fixed_price_aud?: number | null
+          max_order_total_aud?: number | null
+          max_packed_thickness_mm?: number | null
+          max_packed_length_mm?: number | null
+          max_packed_width_mm?: number | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          shipping_method?: Database["public"]["Enums"]["shipping_method"]
+          carrier_id?: number
+          billing_weight_mode?: string
+          service_type?: string | null
+          fixed_price_aud?: number | null
+          max_order_total_aud?: number | null
+          max_packed_thickness_mm?: number | null
+          max_packed_length_mm?: number | null
+          max_packed_width_mm?: number | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "carrier_dispatch_options_carrier_id_fkey"
+            columns: ["carrier_id"]
+            isOneToOne: false
+            referencedRelation: "carriers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      flat_rate_package_specs: {
+        Row: {
+          id: number
+          // 'satchel' | 'box', CHECK-enforced.
+          package_type: string
+          // 'XS' | 'S' | 'M' | 'L' | 'XL', CHECK-enforced. There is no box XS --
+          // Australia Post does not sell one.
+          size_label: string
+          length_mm: number
+          width_mm: number
+          // Null on satchels, which have no fixed depth.
+          depth_mm: number | null
+          // What the carrier charges the packaging as, whatever is inside it.
+          maps_to_weight_kg: number
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          package_type: string
+          size_label: string
+          length_mm: number
+          width_mm: number
+          depth_mm?: number | null
+          maps_to_weight_kg: number
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          package_type?: string
+          size_label?: string
+          length_mm?: number
+          width_mm?: number
+          depth_mm?: number | null
+          maps_to_weight_kg?: number
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      shipping_settings: {
+        Row: {
+          id: number
+          au_post_max_length_mm: number
+          au_post_max_weight_kg: number
+          eparcel_oversize_surcharge_aud: number
+          eparcel_oversize_threshold_mm: number
+          eparcel_fuel_charge_rate: number
+          // How much cheaper a quote must be to beat the carrier-priority order
+          // outright. xpros hard-codes this as 0.05.
+          quote_tiebreak_threshold: number
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          au_post_max_length_mm?: number
+          au_post_max_weight_kg?: number
+          eparcel_oversize_surcharge_aud?: number
+          eparcel_oversize_threshold_mm?: number
+          eparcel_fuel_charge_rate?: number
+          quote_tiebreak_threshold?: number
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          au_post_max_length_mm?: number
+          au_post_max_weight_kg?: number
+          eparcel_oversize_surcharge_aud?: number
+          eparcel_oversize_threshold_mm?: number
+          eparcel_fuel_charge_rate?: number
+          quote_tiebreak_threshold?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      postcode_carrier_zones: {
+        Row: {
+          id: number
+          postcode_id: number
+          carrier_id: number
+          zone: string
+          // Null in every xpros row, so NOT NULL DEFAULT 0 here.
+          surcharge: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          postcode_id: number
+          carrier_id: number
+          zone: string
+          surcharge?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          postcode_id?: number
+          carrier_id?: number
+          zone?: string
+          surcharge?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "postcode_carrier_zones_postcode_id_fkey"
+            columns: ["postcode_id"]
+            isOneToOne: false
+            referencedRelation: "postcodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "postcode_carrier_zones_carrier_id_fkey"
+            columns: ["carrier_id"]
+            isOneToOne: false
+            referencedRelation: "carriers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_shipping_quotes: {
+        Row: {
+          id: number
+          order_id: number
+          carrier_id: number
+          shipping_method: Database["public"]["Enums"]["shipping_method"]
+          // Null for options that never touched the rate card (fixed price, API).
+          service_id: number | null
+          zone: string | null
+          quoted_rate: number
+          // 'rate_card' | 'api', CHECK-enforced.
+          computation_type: string
+          is_selected: boolean
+          // Set when the option could not be priced; quoted_rate stays 0 and the
+          // row is excluded from selection.
+          error_message: string | null
+          // Rows written by one Re-Quote run share this value -- that is how the
+          // panel isolates the latest batch.
+          quoted_at: string
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          order_id: number
+          carrier_id: number
+          shipping_method: Database["public"]["Enums"]["shipping_method"]
+          service_id?: number | null
+          zone?: string | null
+          quoted_rate?: number
+          computation_type: string
+          is_selected?: boolean
+          error_message?: string | null
+          quoted_at?: string
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          order_id?: number
+          carrier_id?: number
+          shipping_method?: Database["public"]["Enums"]["shipping_method"]
+          service_id?: number | null
+          zone?: string | null
+          quoted_rate?: number
+          computation_type?: string
+          is_selected?: boolean
+          error_message?: string | null
+          quoted_at?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_shipping_quotes_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_shipping_quotes_carrier_id_fkey"
+            columns: ["carrier_id"]
+            isOneToOne: false
+            referencedRelation: "carriers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_shipping_quotes_service_id_fkey"
+            columns: ["service_id"]
+            isOneToOne: false
+            referencedRelation: "carrier_services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      order_logs: {
+        Row: {
+          id: number
+          order_id: number
+          action: string
+          // Null when the actor is a background task rather than a person --
+          // which is every row the quote engine writes.
+          user_id: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          order_id: number
+          action: string
+          user_id?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          order_id?: number
+          action?: string
+          user_id?: string | null
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_logs_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_logs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           id: number

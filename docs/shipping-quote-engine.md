@@ -5,10 +5,10 @@
 | | |
 |---|---|
 | 源实现 | `xpros` 的 `src/lib/shipping/*` + `src/trigger/quote-shipping.ts` + `src/app/sales-orders/[id]/shipping-quotes-panel.tsx` |
-| 落地对象 | 7 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
-| 迁移文件 | `20260810100000` ~ `20260810140000`（5 个） |
-| 参考数据搬运 | 从 xpros 生产库导出，约 33,000 行邮编分区 + 约 200 行费率 |
-| 状态 | **阶段 0 完成（范围与环境就绪），阶段 1 未开始** —— 见 §0.2 |
+| 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
+| 迁移文件 | `20260810100000` ~ `20260810150000`（6 个，**已全部推送远端**） |
+| 参考数据搬运 | 从 xpros 生产库导出，33,424 行邮编分区 + 194 行费率与选项 |
+| 状态 | **阶段 0–1 完成，数据层已就绪；阶段 2 起未开始** —— 见 §0.2 |
 
 ---
 
@@ -43,14 +43,34 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 | 阶段 | 状态 |
 |---|---|
 | 0 · 范围与决策（§0 六条）、环境变量（§0.1） | ✅ 完成 2026-08-15 |
-| 1 · 5 个迁移 + 抽数脚本 + `database.types.ts` | ⬜ 未开始 |
-| 2 · 引擎纯函数 + 适配器 + 单测 | ⬜ 未开始 |
+| 1 · 6 个迁移 + 抽数脚本 + `database.types.ts` | ✅ 完成 2026-08-16，已推送远端（见 §3.4） |
+| 2 · 引擎纯函数 + 适配器 + 单测 | ⬜ 未开始 ← **下次从这里继续** |
 | 3 · Aramex 客户端 | ⬜ 未开始（凭证已就绪，不再阻塞） |
 | 4 · Trigger.dev 接入 + task | ⬜ 未开始 |
 | 5 · Server Actions + 面板 UI | ⬜ 未开始 |
 | 6 · 验收（§10） | ⬜ 未开始 |
 
-**恢复工作时的唯一未决项**：`Register_Letter` 的 `fixed_price_aud`。阶段 1 先按 xhunter 的 **$5.00** 落进迁移，确认后改一行即可——它只影响自动选优，不影响任何结构（§9.1）。
+### 阶段 1 交付清单（2026-08-16）
+
+| 产物 | 位置 |
+|---|---|
+| 6 个迁移 | `supabase/migrations/20260810100000` ~ `20260810150000` |
+| 抽数脚本 | [scripts/reference/export-carrier-zones.mjs](../scripts/reference/export-carrier-zones.mjs) |
+| 类型定义 | `src/lib/supabase/database.types.ts` 手工补 9 张表，`npx tsc --noEmit` 通过 |
+
+远端实测：承运商 4 / 服务档 22 / 费率 138 / 报价选项 25 / 袋箱规格 9 / 常量 1 / 分区 33,424（两家各 16,712，与 `postcodes` 全等）。`aramex` 与 `reg_letter` 在三张费率相关表中均 0 行。客户侧 171,968 人两家承运商均可解析分区。
+
+`Register_Letter` 的 `fixed_price_aud` 已确认为 **$5.00**（沿用 xhunter），写进 `20260810120000`（§9.1）。
+
+### 恢复工作时先读这三条
+
+阶段 2 要移植 `src/lib/shipping/*`。以下三点在阶段 1 已查清并写进本文档，**动手前先看，否则会照着 xpros 抄进已知的坑**：
+
+1. **§4.3 第 11、12 条** —— `service_type` 大小写在 xpros 是分裂的，本库已统一为小写 + CHECK。两处 `.toLowerCase()` 不要抄，`calculate-rate.ts` 整个文件不要移植（它是带 bug 的死代码）。
+2. **§9.3** —— `Mypost_Reg_Xs_Satchel` 的三个尺寸值在 xpros 是错位的，本库有意留空，几何判定交给 `flat_rate_package_specs`。不要"补全"它。
+3. **§3.4** —— 分区数据有一层补齐迁移（`20260810150000`）叠在抽数脚本产物之上。澳邮**没有 ACT 分区**，堪培拉归 NSW Metro；重跑抽数脚本会再次产出缺 512 行的文件。
+
+§9.2 剩余 4 项均不阻塞阶段 2：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项属阶段 4–5。
 
 ---
 
@@ -90,9 +110,10 @@ xpros 的报价引擎支持 6 个承运商，go2office 只保留 3 个。裁剪�
 |---|---|---|
 | `20260810100000_create_shipping_domain.sql` | `carriers` / `carrier_services` / `carrier_zone_rates` / `carrier_dispatch_options` / `flat_rate_package_specs` / `shipping_settings` 六张表 + RLS + 授权 | 结构 |
 | `20260810110000_create_order_shipping_quotes.sql` | `order_shipping_quotes` 结果表 + 索引 + RLS | 结构 |
-| `20260810120000_seed_carrier_reference_data.sql` | 上述六张表的数据：承运商 4 行、服务档 22 行、费率 138 行、报价选项 25 行、袋箱规格 9 行、常量 1 行 | ~200 行 |
-| `20260810130000_create_postcode_carrier_zones.sql` | `postcode_carrier_zones` 表 + **32,915 行**邮编分区数据 | ~2.5 MB |
+| `20260810120000_seed_carrier_reference_data.sql` | 上述六张表的数据：承运商 4 行、服务档 22 行、费率 138 行、报价选项 25 行、袋箱规格 9 行、常量 1 行 | 194 行 |
+| `20260810130000_create_postcode_carrier_zones.sql` | `postcode_carrier_zones` 表 + **32,912 行**邮编分区数据（生成文件） | 1.8 MB |
 | `20260810140000_create_order_logs.sql` | 极简订单操作日志表（见 §2.7） | 结构 |
+| `20260810150000_backfill_missing_carrier_zones.sql` | 补齐 xpros 源表漏掉的分区（eParcel 323 行 + MyPost 189 行，见 §3.4） | 512 行 |
 
 ### 2.2 `carriers`
 
@@ -187,7 +208,7 @@ CREATE TABLE public.carrier_zone_rates (
 
 eParcel 的 9 个分区：`Local`、`Same State Metro`、`Same State Remote`、`Near State Capital/Metro/Remote`、`Distant State Capital/Metro/Remote`。
 
-### 2.5 `carrier_dispatch_options` — 哪些 shipping_method 参与报价（24 行）
+### 2.5 `carrier_dispatch_options` — 哪些 shipping_method 参与报价（25 行）
 
 ```sql
 CREATE TABLE public.carrier_dispatch_options (
@@ -222,7 +243,7 @@ CREATE TABLE public.carrier_dispatch_options (
 |---|---|---|
 | `shipping_method` | `Register_Letter` | |
 | `carrier_id` | 4（`reg_letter`） | |
-| `fixed_price_aud` | **`5.00`** | 预付标签单价。**这是 xhunter 的价，需确认 go2office 是否相同**（§9.1） |
+| `fixed_price_aud` | **`5.00`** | 预付标签单价。✅ 2026-08-16 用户确认沿用 xhunter 的 $5.00（§9.1） |
 | `max_order_total_aud` | `100.00` | Registered Post 的保价上限 |
 | `max_packed_thickness_mm` | `20` | 信件厚度上限 |
 | `max_packed_length_mm` | `297` | A4 长边 |
@@ -242,7 +263,7 @@ if (opt.fixedPriceAud !== null) {
 
 能力表条目：`reg_letter: { postalDelivery: true, maxWeightKg: 0.5 }`。它同时受四道闸门约束——0.5kg 计费重、$100 订单金额、上面三个尺寸上限、以及邮政承运商共用的 `au_post_max_length_mm`。
 
-### 2.6 `postcode_carrier_zones` — 邮编 → 分区（32,915 行）
+### 2.6 `postcode_carrier_zones` — 邮编 → 分区（32,912 行）
 
 ```sql
 CREATE TABLE public.postcode_carrier_zones (
@@ -262,11 +283,20 @@ CREATE INDEX postcode_carrier_zones_carrier_idx
 
 行数（源自 xpros，已剔除多仓与停用承运商）：
 
-| 承运商 | xpros 来源 | 行数 | 分区 |
-|---|---|---:|---:|
-| `mypost` | `carrier_id = 2, origin_warehouse_id IS NULL` | 16,525 | 3 |
-| `eparcel` | `carrier_id = 4, origin_warehouse_id = 2`（主仓） | 16,390 | 9 |
-| | **合计** | **32,915** | |
+| 承运商 | xpros 来源 | 源行数 | 导入行数 | 分区 |
+|---|---|---:|---:|---:|
+| `mypost` | `carrier_id = 2, origin_warehouse_id IS NULL` | 16,525 | 16,523 | 3 |
+| `eparcel` | `carrier_id = 4, origin_warehouse_id = 2`（主仓） | 16,390 | 16,389 | 9 |
+| | **合计** | 32,915 | **32,912** | |
+
+**少的 3 行是对的**，不是丢数据：两个郊区在 xpros 的 `postcodes` 里重复，导入本库时已被合并（16,714 → 16,712，见迁移 `20260809110000`），它们的分区行随之合并。
+
+| 郊区 | 重复形式 | 影响 |
+|---|---|---|
+| `5211 HAYBOROUGH` | 源表整行重复一次 | 两家承运商各 −1 |
+| `0815 CHARLES DARWIN UNIVERSITY` | 同时挂在 `0815` 与 `815` 下 | mypost −1 |
+
+三处合并后 zone 均一致，抽数脚本的冲突断言未触发。
 
 `surcharge` 在 xpros 里全部为 NULL，此处直接建成 `NOT NULL DEFAULT 0`，省掉代码侧的 `?? 0`。
 
@@ -397,6 +427,57 @@ GROUP BY c.code;
 
 客户侧数据质量已核（2026-08-15）：178,024 个客户中仅 3 个邮编为空，178,001 个是 1–4 位数字形式，因此解析基础是好的。
 
+> 查询二会把 `aramex` 与 `reg_letter` 报成 100% 解析不到 —— 它是 `CROSS JOIN carriers`，而这两家按设计就没有分区行（§2.5.1）。看 `mypost` / `eparcel` 两行即可。
+
+### 3.4 阶段 1 实测结果（2026-08-16）
+
+六个迁移已推送远端。行数全部符合：承运商 4 / 服务档 22 / 费率 138 / 报价选项 25 / 袋箱规格 9 / 常量 1 / 分区 32,912 → 补齐后 **33,424**（两家各 16,712，与 `postcodes` 全等）。`aramex` 与 `reg_letter` 在 `carrier_services`、`carrier_zone_rates`、`postcode_carrier_zones` 三张表中均为 0 行。
+
+抽数脚本报告 **0 行**无法在 `public.postcodes` 中解析，故迁移末尾的行数断言一次通过。
+
+**客户覆盖率**（178,024 个客户），补齐前 → 补齐后：
+
+| 类别 | 补齐前 | 补齐后 |
+|---|---:|---:|
+| 两家都能解析 | 166,161 | **171,968** |
+| 仅 mypost | 5,699 | 0 |
+| 仅 eparcel | 107 | 0 |
+| 两家都不行 | 1 | 0 |
+| 地址在 `postcodes` 中查无此郊区 | 6,056 | 6,056 |
+
+最后一行**不是本次能修的** —— 是客户自己填的 `(postcode, city)` 在澳邮邮编表里不存在（拼写、旧地名、写了州名等），与分区数据无关。这些客户任何承运商都报不出价，属客户数据质量议题。
+
+#### 源表的两处缺口，已由迁移 `20260810150000` 补齐
+
+导入后两家承运商都缺一批郊区。**都不是澳邮不投递，而是 xpros 的源表不全**。补齐后 eParcel 与 mypost 各 **16,712 行**，与 `postcodes` 全等；客户侧 171,968 人全部两家可解析，「仅某一家」归零。
+
+> **寄件地是 Melbourne**，数据里没写但可反推：3000 = `Local`、3350 = `Same State Metro`、3844 = `Same State Remote`、2250/2500 = `Near State Metro`、4000/5000 = `Near State Capital`、6000 = `Distant State Capital` —— 就是澳邮 9 分区矩阵的 Melbourne 列，逐格吻合。
+
+**eParcel 缺 323 行。** 其中 321 行是 **64 个邮编整段缺失**，全部落在澳邮 `NSW Metro` 区内（该区的官方描述就是「Outer Sydney, Gosford, Wollongong, Newcastle, **Canberra**, Albury, Tweed Heads」）：
+
+| 缺失段 | 对应 AP NSW Metro 范围 | 地区 |
+|---|---|---|
+| `0200` | `200-299` | ANU / ACT 信箱 |
+| `2282`–`2310` | `2282-2310` | Newcastle |
+| `2485`–`2486` | `2485-2486` | Tweed Heads |
+| `2600`–`2620` | `2600-2620` | Canberra |
+| `2640`–`2641` | `2640-2641` | Albury |
+| `2708` | `2708-2709` | — |
+| `2900`–`2914` | `2900-2920` | Tuggeranong / Gungahlin |
+
+> ⚠️ **澳邮没有 ACT 分区，堪培拉归在 NSW Metro 下。** 去找一张单独的 ACT 费率表必然找不到，而由此得出「eParcel 不服务 ACT」是错的 —— 正确的读法是它按 NSW Metro 服务。本文档此前的版本就栽在这一步上。
+
+NSW Metro 自 Melbourne 发出 = **`Near State Metro`**，三条独立证据一致：① 澳邮 9 分区矩阵；② 已导入的 33 个 NSW Metro 邮编（Gosford 2250–2263、Wollongong 2500–2507/2515–2532、Berowra 2080–2084）共 254 个郊区**全部**是该值、零例外；③ xpros 停用的 Z6 账号（carrier 1）**有**这 64 个邮编，标 `Inter State Metro`（6 分区体系的 Metro 类，绝非 remote）—— 只有 Z9 那张表丢了它们。
+
+另 2 行是零散新设郊区，按同邮编兄弟郊区取值（一个邮编只对应一个分区，无可选）：`2763 NIRIMBA FIELDS` → `Near State Capital`，`4702 ARCTURUS` → `Near State Remote`。
+
+**MyPost 缺 189 行**，成因不同。MyPost 是三分区的另一套产品，上面的推理**一条都不适用**；而且它的分区**不按州划分**（每个州都混有 Zone_2 与 Zone_3），所以「NSW 就是 Zone_2」这种捷径也没有。
+
+- **136 行**由同邮编兄弟郊区直接读出（表中无任何邮编对应两个 MyPost 分区，不存在选择问题）
+- **53 行**整段邮编缺失，几乎全是 PO Box / 邮件中心邮编（Sydney `1xxx` 占 46 个）—— 这正暴露了 MyPost 那张表是**只按街道投递邮编**建的，同样的 `1xxx` 段 eParcel 一个不缺。除 `MELBOURNE 8107` → `Zone_1` 外全部 → `Zone_2`，依据按序为：45 行由**同名郊区**在街道邮编下的唯一取值确定；8 行（名字有歧义或查无同名）由**相邻邮编**确定，且相邻邮编无一例外都是 Zone_2
+
+抽数脚本重跑会再次产出缺这些行的文件 —— 补齐迁移排在它之后，两者配合才是全量。脚本头部已注明。
+
 ---
 
 ## 4. 报价引擎移植
@@ -452,6 +533,12 @@ go2office 必须改成：
 | 8 | `TIEBREAK_THRESHOLD = 0.05` 硬编码 | 读 `shipping_settings.quote_tiebreak_threshold` | §2.8 |
 | 9 | metrics 列名 `total_weight` / `packed_l` / … | `total_weight_kg` / `packed_length_mm` / … | 见下表 |
 | 10 | 服务等级取自 `postage_service` 枚举 | 取自自由文本，见 4.4 | |
+| 11 | `option.serviceType.toLowerCase()`（`rate-card.adapter.ts:42`、`flat-rate.adapter.ts:80`） | **两处 `.toLowerCase()` 都可以去掉** | 见下方「`service_type` 的大小写」 |
+| 12 | `calculate-rate.ts` | **整个文件不移植** | 同上：它是死代码，全库无调用方，且带着未修的大小写 bug |
+
+**`service_type` 的大小写（2026-08-16 核实）**：xpros 的 `carrier_dispatch_options.service_type` 存 `'Standard'` / `'Express'`，而 `carrier_services.service_type` 存 `'standard'` / `'express'`，两者用 `=` 直接比较**永远不匹配**。存活的两个适配器各自加了一个 `.toLowerCase()` 抹平；第三个调用方 `calculate-rate.ts` 没加，一旦被调用就会走进 `No service tiers found` —— 它从未被任何地方调用过，这是没人发现的唯一原因。
+
+go2office 两张表**统一存小写**，并各加了一条 `CHECK (... = lower(...))`（迁移 `20260810100000`）。所以移植时这两个 `.toLowerCase()` 是多余的，`calculate-rate.ts` 则连同它的 bug 一起不要。
 
 **metrics 列名映射**（go2office 的 `order_metrics_summary` 已经把引擎要的全部输入准备好了，这是本次移植最省事的一块）：
 
@@ -661,11 +748,11 @@ xpros 没有这两个提示，是因为它没有这两个字段——go2office �
 
 ## 9. 待确认的业务决策
 
-### 9.1 `Register_Letter` 的固定价是多少？（唯一遗留项）
+### 9.1 ~~`Register_Letter` 的固定价是多少？~~（✅ 2026-08-16 已确认）
 
-范围已定（决策 6）：`Register_Letter` 参与、`Letter` 不参与。剩下的只有一个数字——**`fixed_price_aud` 是否仍是 xhunter 的 $5.00**。
+范围已定（决策 6）：`Register_Letter` 参与、`Letter` 不参与。剩下的那个数字已由用户确认——**`fixed_price_aud` 沿用 xhunter 的 `5.00`**，写进 `20260810120000_seed_carrier_reference_data.sql`。
 
-⚠️ 填错不会报错，只会静默影响自动选优：填高了 `Register_Letter` 永远选不中，填低了它会抢走本该走 MyPost 的订单。
+⚠️ 它不报错、只静默影响自动选优：填高了 `Register_Letter` 永远选不中，填低了它会抢走本该走 MyPost 的订单。日后调价改这一行即可，不涉及任何结构变更。
 
 顺带记录一个**已接受的取舍**：`Letter` 覆盖 134,391 张历史订单（66%），它不参与报价意味着一张本可平信寄出的小订单，引擎给出的最便宜选项是 `Register_Letter` $5 或 MyPost 最低档（约 $6.55）。这与 xpros 的行为一致——平信无追踪、无可查询的费率结构，不适合进报价表。人工仍可在订单上直接选 `Letter`。
 
@@ -677,24 +764,53 @@ xpros 没有这两个提示，是因为它没有这两个字段——go2office �
 | 2 | Aramex 的 `max_order_total_aud = 200` 是 xhunter 的保价上限，go2office 是否相同？ | 高价订单会/不会出现 Aramex 选项 |
 | 3 | 「无可用承运商」时自动把订单改成 `issued` —— 确认这是期望行为，还是宁可**不改状态、只在面板上报错**？ | 后者更安全，且省掉 `order_logs`（§2.7） |
 | 4 | 报价是否要在订单创建时**自动触发**（xpros 有 `triggeredBy: 'auto'` 这条路径），还是只保留手工按钮？ | 本计划只做手工按钮；自动触发留作后续 |
-| 5 | xpros 的 `Mypost_Reg_Xs_Satchel` 这一行填的是 `thickness=260 / length=160 / width=90`，**三个值的语义看起来是错位的**（厚度大于长度，且与该袋 280×215mm 的实际规格对不上）。`canQuote` 会拿它们分别去卡最短边 / 最长边 / 中间边 | 照搬会让 XS 袋在本该可用时被过滤掉（报价偏贵，不报错）。建议**不搬这三个值**，留空由 `flat_rate_package_specs` 的实际规格判定 |
+| 5 | ~~`Mypost_Reg_Xs_Satchel` 的三个尺寸值错位~~ | ✅ 已定：**不搬**，三列留空。依据见 §9.3 |
+
+### 9.3 `Mypost_Reg_Xs_Satchel` 的三个尺寸值为什么不搬（2026-08-16 已定）
+
+这三列不是自由命名的，`canQuote` 把它们各自绑到排序后的某条边（`xpros/src/lib/shipping/carrier-capabilities.ts:89-93`）：
+
+```ts
+const [dim0, dim1, dim2] = [pkg.packedL, pkg.packedW, pkg.packedH].sort((a, b) => b - a)
+// dim0 = longest, dim1 = middle, dim2 = shortest (thickness)
+if (maxPackedThicknessMm !== null && dim2 > maxPackedThicknessMm) return false  // 最短边
+if (maxPackedLengthMm    !== null && dim0 > maxPackedLengthMm)    return false  // 最长边
+if (maxPackedWidthMm     !== null && dim1 > maxPackedWidthMm)     return false  // 中间边
+```
+
+xpros 那行是 `thickness=260 / length=160 / width=90`，代进去是「最短边 ≤ 260、最长边 ≤ 160、中间边 ≤ 90」。**两个独立的矛盾**：
+
+1. **自相矛盾**：恒有 最短 ≤ 中间 ≤ 最长，所以「最长 ≤ 160」已把最短边压到 160 以下，「中间 ≤ 90」又压到 90 以下 —— 那条 260 的厚度限制永远不可能生效。
+2. **与袋子自身规格冲突**：XS 袋是 280 × 215mm，这行却拒收长边 > 160mm 的东西，远紧于袋子本身。
+
+把 260/160/90 当成 **L / W / H** 读则完全自洽（最长 ≤ 260、中间 ≤ 160、最短 ≤ 90），且正好卡进 280 × 215 的袋子。xpros 表的物理列序恰是 `thickness, length, width`，按位置填入一组 L/W/H 就会落成这样 —— **这一步是推断**，但同表的 `Register_Letter`（`20 / 297 / 210`，最薄边 20mm + A4 长短边）明显是按列名填对的，一行按名、一行按位，符合两次不同录入。
+
+**后果**：约束比预期紧得多，中间边超过 90mm 的小件会被踢出 XS 袋，而 XS 袋映射到 0.25kg（MyPost 最便宜档，standard Zone_1 $6.12），订单于是静默报到更贵的档。
+
+**留空是安全的**，因为真正的几何判定不在这三列，而在 flat-rate 适配器里按袋子实际规格算（`flat-rate.adapter.ts:53`，袋子按二维折算、厚度从两边各吃一次）：
+
+```ts
+fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
+```
+
+另外四个尺寸的袋子（S/M/L/XL）本来就**只**靠这一步 —— 它们这三列全是 NULL。XS 留空是回到同一条路径，不是放弃校验。
 
 ---
 
 ## 10. 验收清单
 
-- [ ] `postcode_carrier_zones` 行数 = 32,915，且 `(postcode_id, carrier_id)` 无重复
-- [ ] §3.3 查询二：解析不到分区的客户数在可接受范围，且**已逐条看过**不是系统性缺口
-- [ ] 抽数脚本对「xpros 有、go2office 解析不到」的 `(postcode, locality)` 组合有完整输出，且已人工确认
+- [x] `postcode_carrier_zones` 行数 = 33,424（导入 32,912 + 补齐 512，§3.4），且 `(postcode_id, carrier_id)` 无重复
+- [x] §3.3 查询二：已逐条看过 —— 查出两处源表缺口，均已按澳邮官方分区定义补齐（§3.4），客户侧「仅某一家可解析」归零
+- [x] 抽数脚本对「xpros 有、go2office 解析不到」的 `(postcode, locality)` 组合有完整输出：0 行
 - [ ] `npm test` 全绿，含新增的 shipping 用例
 - [ ] 取 10 张历史订单（覆盖：轻小件 / 5kg 边界 / 超 1040mm / PO Box 地址 / 金额 > $200），在 go2office 与 xpros 各跑一次报价，**同一承运商的价格逐分对齐**
 - [ ] 一张 ≤0.5kg、≤$100、厚度 ≤20mm 的订单能报出 `Register_Letter`；把金额抬到 $101 后该选项消失（`max_order_total_aud` 生效）
-- [ ] `carrier_services` / `carrier_zone_rates` / `postcode_carrier_zones` 中 `reg_letter` 与 `aramex` 的行数**均为 0**（§2.5.1）
+- [x] `carrier_services` / `carrier_zone_rates` / `postcode_carrier_zones` 中 `reg_letter` 与 `aramex` 的行数**均为 0**（§2.5.1）
 - [ ] 一张 PO Box + 超重订单能正确落到 `issued` 并在 `order_logs` 留痕
 - [ ] 面板：Re-Quote → 轮询 → 自动选中 → `orders.shipping_method` 被回写；Clear Quotes 走全局确认框
 - [ ] Dialog / 面板在移动端与桌面端各验一次（CLAUDE.md 规则 12）
 - [ ] `docs/current_tasks.md` 已创建并记录 `quote-shipping`（CLAUDE.md 规则 4）
-- [ ] `src/lib/supabase/database.types.ts` 已手工补齐 7 张新表（CLAUDE.md 规则 18）
+- [x] `src/lib/supabase/database.types.ts` 已手工补齐 **9** 张新表（CLAUDE.md 规则 18），`npx tsc --noEmit` 通过
 
 ---
 
@@ -706,7 +822,7 @@ xpros 没有这两个提示，是因为它没有这两个字段——go2office �
 
 ### 11.2 对迁移脚本（CLAUDE.md 规则 15）的影响
 
-**无影响**。本次新增的 7 张表都不被 `scripts/migration/001`~`004` 引用，也不改动这些脚本已引用的任何列。`order_shipping_quotes.order_id` 对 `orders` 的外键是 `ON DELETE CASCADE`，`004` 的重跑（upsert，不删行）不会触发它。
+**无影响**。本次新增的 9 张表都不被 `scripts/migration/001`~`004` 引用，也不改动这些脚本已引用的任何列。`order_shipping_quotes.order_id` 对 `orders` 的外键是 `ON DELETE CASCADE`，`004` 的重跑（upsert，不删行）不会触发它。
 
 ### 11.3 不引入的东西
 
