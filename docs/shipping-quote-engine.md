@@ -6,9 +6,9 @@
 |---|---|
 | 源实现 | `xpros` 的 `src/lib/shipping/*` + `src/trigger/quote-shipping.ts` + `src/app/sales-orders/[id]/shipping-quotes-panel.tsx` |
 | 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
-| 迁移文件 | `20260810100000` ~ `20260810150000`（6 个，**已全部推送远端**） |
+| 迁移文件 | `20260810100000` ~ `20260810150000` + `20260811100000` / `20260811110000`（8 个，**已全部推送远端**） |
 | 参考数据搬运 | 从 xpros 生产库导出，33,424 行邮编分区 + 194 行费率与选项 |
-| 状态 | **阶段 0–4 完成，引擎已能由 Trigger.dev task 跑通；阶段 5（UI）未开始** —— 见 §0.2 |
+| 状态 | **阶段 0–4 完成；阶段 5 代码完成、浏览器交互待人工点一遍** —— 见 §0.2 |
 
 ---
 
@@ -47,8 +47,8 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 | 2 · 引擎纯函数 + 适配器 + 单测 | ✅ 完成 2026-08-22（见 §0.3） |
 | 3 · Aramex 客户端 | ✅ 完成 2026-08-22，随阶段 2 一并交付（见 §0.3） |
 | 4 · Trigger.dev 接入 + task | ✅ 完成 2026-08-22（见 §0.5） |
-| 5 · Server Actions + 面板 UI | ⬜ 未开始 ← **下次从这里继续** |
-| 6 · 验收（§10） | ⬜ 未开始 |
+| 5 · Server Actions + 面板 UI | 🟡 代码完成 2026-08-22，**浏览器交互未验证**（见 §0.6） |
+| 6 · 验收（§10） | 🟡 剩浏览器侧两项 |
 
 ### 阶段 1 交付清单（2026-08-16）
 
@@ -129,15 +129,57 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 ---
 
-### 阶段 5 动手前先读这三条
+## 0.6 阶段 5 交付清单（2026-08-22）
 
-1. **引擎不写 `orders.shipping_method`**。自动选中只是建议，落到订单上是操作员的动作——这一步就在阶段 5 的 Server Action 里，xpros 的对应实现是 `src/app/sales-orders/[id]/shipping-actions.ts` 的第 122 行。
-2. **`order_shipping_quotes_one_selected_idx` 是 `(order_id) WHERE is_selected` 的唯一索引**。手工改选另一个方案时，必须先清掉当前选中项再置位，顺序反了会撞约束。引擎里已经这么做（§0.3 第 6 条），Server Action 不会自动继承这件事。
-3. **面板要显示报错行**。一次报价通常带一批 `does not fit` 的错误行（订单 205975 是 20 行），`filterFlatRateGroups` 有意保留它们——一个定额组内全都装不下时，整组错误都留着，否则面板会无声地少五个选项。UI 需要把错误行折叠而不是丢弃。
+| 产物 | 位置 |
+|---|---|
+| 授权迁移 | `20260811100000_grant_shipping_quote_selection.sql` + `20260811110000_restrict_shipping_quote_update_columns.sql`（均已推远端） |
+| 查询层 | [src/lib/queries/shipping-quotes.ts](../src/lib/queries/shipping-quotes.ts) |
+| Server Actions | [src/lib/actions/shipping-quote.ts](../src/lib/actions/shipping-quote.ts) |
+| 面板 | [shipping-quotes-panel.tsx](<../src/app/(dashboard)/orders/[id]/_components/shipping-quotes-panel.tsx>) |
+| 挂载 | [订单详情页](<../src/app/(dashboard)/orders/[id]/page.tsx>)，Summary Cards 与 Transactions 之间 |
+| 新增工具 | `formatDateTime()` 加进 [src/lib/format.ts](../src/lib/format.ts) |
 
-`quote-engine.ts` 里有两处留给后续阶段的约定，改动前先看代码注释：**引擎不写 `orders.shipping_method`**（自动选中只是建议，落到订单上是操作员的动作，属阶段 5 的 Server Action）；**Aramex 报价用 `packed_*` 而非 `dominant_*`**（§4.5）。
+### ⚠️ Supabase 的 GRANT 几乎都是装饰，真正的闸门是 RLS
 
-§9.2 剩余 4 项：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项属阶段 4–5。
+这次收窄可写列时才发现，它影响的是**本仓库全部迁移**，不止运费域：
+
+Supabase 对 `public` 下每张新表预置 `ALTER DEFAULT PRIVILEGES`，给 `anon` / `authenticated` / `service_role` **全部权限**（`pg_default_acl` 里是 `arwdDxtm`）。所以迁移里那些 `GRANT SELECT ON x TO authenticated` 只是在重述已经成立的事实。真正在挡的是 RLS——开了 RLS 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表正是这个状态，**结论没错，但机制不是注释里写的那个**。
+
+由此 `20260811100000` 的 `GRANT UPDATE (is_selected)` **完全无效**：列级 GRANT 是叠加的，挡不住已经存在的表级 UPDATE。推上去后实测 `quoted_rate` 照样能改 22 行。`20260811110000` 先 `REVOKE UPDATE ON ... FROM authenticated` 再重给列级才生效（REVOKE 表级会连列级一起撤，顺序不可反）。
+
+以 `SET ROLE authenticated` 逐条探测的最终权限面：
+
+| 操作 | 结果 | |
+|---|---|---|
+| `SELECT` 报价 | 允许 | |
+| `UPDATE is_selected` | 允许 | 改选方案 |
+| `UPDATE quoted_rate` / `shipping_method` | **拒绝** | 列级授权生效 |
+| `INSERT` 报价行 | **拒绝** | 无 INSERT 策略 |
+| `DELETE` 报价 | 允许 | Clear quotes |
+| `UPDATE orders.shipping_method` | 允许 | 回写订单 |
+
+### 四处没照抄 xpros
+
+1. **轮询到新批次后提交的是引擎选的那条，不是最便宜那条**。xpros 的面板在拿到新批次后用朴素「最便宜」重新选一遍并写回订单，把引擎的 5% 平局带 + 承运商优先级悄悄推翻。订单 205975 就是活例子：引擎选 `Eparcel_Regular` $9.83 而非 `Mypost_Regular` $9.69，xpros 会把它翻掉。本版取 `is_selected` 已为 true 的那行去回写。
+2. **去掉 Weight 列**。xpros 每行重复同一个订单级重量，二十行一模一样；改为在卡片头部显示一次。
+3. **用项目自己的语义 Badge**（`success` / `warning` / `info`），不是 xpros 硬编码的 emerald / amber / sky。
+4. **§7.2 的两条警告合并成一条**。[order-summary-cards.tsx](<../src/app/(dashboard)/orders/[id]/_components/order-summary-cards.tsx>) 已经在正上方说了同样的话，面板里那条只讲对报价的后果——袋箱装箱判定是猜的。
+
+### 未验证的部分
+
+`npm run build` / `tsc` / `eslint` / `npm test`（105）全绿，服务端四条路径已按 `authenticated` 角色逐条探测。**但浏览器里没点过**：轮询、toast、确认框、以及 CLAUDE.md 规则 12 要求的移动端 + 桌面端各验一次，都还没做。登录态需要真人。
+
+### 一个不在本次范围内的问题
+
+[confirm-provider.tsx](../src/components/providers/confirm-provider.tsx) 的默认按钮文案是中文（「取消」「确认」），与 CLAUDE.md 第 1 节「所有 UI 文本必须用英文」冲突。现有调用方都显式传了文案所以看不出来。未改动。
+
+### 阶段 6 还剩什么
+
+- 上面「未验证的部分」——浏览器里点一遍，移动端 + 桌面端各一次
+- 验收清单里「PO Box + 超重订单落到 `issued` 并在 `order_logs` 留痕」——这条会真的改一张订单的状态，等有 UI 能看见结果时再做
+- §9.2 剩余 4 项：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项已随阶段 4–5 完成
+- Trigger.dev 控制台的 Environment Variables（6 个，见 [current_tasks.md](current_tasks.md)）——不配就无法 `deploy`
 
 ---
 
@@ -878,7 +920,7 @@ fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
 - [x] 一张 ≤0.5kg、≤$100、厚度 ≤20mm 的订单能报出 `Register_Letter`（订单 205970，$5.00 且被自动选中）；金额上限一侧尚未反向验证
 - [x] `carrier_services` / `carrier_zone_rates` / `postcode_carrier_zones` 中 `reg_letter` 与 `aramex` 的行数**均为 0**（§2.5.1）
 - [ ] 一张 PO Box + 超重订单能正确落到 `issued` 并在 `order_logs` 留痕 —— 未验证：这条要求真的改一张订单的状态，留到阶段 5 有 UI 能看见结果时再做
-- [ ] 面板：Re-Quote → 轮询 → 自动选中 → `orders.shipping_method` 被回写；Clear Quotes 走全局确认框
+- [ ] 面板：Re-Quote → 轮询 → 自动选中 → `orders.shipping_method` 被回写；Clear Quotes 走全局确认框 —— **需人工在浏览器点一遍**，服务端四条路径已按 `authenticated` 角色逐条探测通过（§0.6）
 - [ ] Dialog / 面板在移动端与桌面端各验一次（CLAUDE.md 规则 12）
 - [x] [docs/current_tasks.md](current_tasks.md) 已创建并记录 `quote-shipping`（CLAUDE.md 规则 4）
 - [x] `src/lib/supabase/database.types.ts` 已手工补齐 **9** 张新表（CLAUDE.md 规则 18），`npx tsc --noEmit` 通过

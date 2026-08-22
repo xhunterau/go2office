@@ -5,9 +5,11 @@ import {
   fetchOrderDetail,
   fetchOrderTransactionsWithItems,
 } from "@/lib/queries/orders"
+import { fetchLatestShippingQuotes } from "@/lib/queries/shipping-quotes"
 import { OrderDetailHeader } from "./_components/order-detail-header"
 import { OrderSummaryCards } from "./_components/order-summary-cards"
 import { OrderTransactionsTable } from "./_components/order-transactions-table"
+import { ShippingQuotesPanel } from "./_components/shipping-quotes-panel"
 
 export default async function OrderDetailPage({
   params,
@@ -24,9 +26,10 @@ export default async function OrderDetailPage({
   // handful of picked lines (250687 items over 203315 orders), so a second
   // round trip per expansion would cost more than fetching them all
   // (docs/orders-ui.md 6.1).
-  const [detail, lines] = await Promise.all([
+  const [detail, lines, quotes] = await Promise.all([
     fetchOrderDetail(supabase, orderId),
     fetchOrderTransactionsWithItems(supabase, orderId),
+    fetchLatestShippingQuotes(supabase, orderId),
   ])
 
   if (detail.error) {
@@ -44,6 +47,18 @@ export default async function OrderDetailPage({
       <OrderDetailHeader order={detail.order} />
 
       <OrderSummaryCards order={detail.order} />
+
+      {/* A quote failure is not a reason to hide the panel: the button that
+          fixes it lives inside. The batch just comes back empty. */}
+      <ShippingQuotesPanel
+        orderId={detail.order.id}
+        initialQuotes={quotes.quotes}
+        initialQuotedAt={quotes.quotedAt}
+        totalWeightKg={detail.order.metrics.total_weight_kg}
+        chargeableWeightKg={detail.order.metrics.chargeable_weight_kg}
+        hasEstimatedDimensions={detail.order.metrics.has_estimated_dimensions}
+        unresolvedItemCount={detail.order.metrics.unresolved_item_count}
+      />
 
       {lines.error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">

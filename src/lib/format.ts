@@ -77,3 +77,17 @@ export function formatDate(value: string | null): string {
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? "—" : dateFormatter.format(parsed)
 }
+
+// Date and time. Unlike formatDate above, this one is for timestamps the app
+// itself writes -- a quote batch's quoted_at, for instance -- where the time is
+// a real fact and two runs on the same day have to be tellable apart.
+const dateTimeFormatter = new Intl.DateTimeFormat("en-AU", {
+  dateStyle: "medium",
+  timeStyle: "short",
+})
+
+export function formatDateTime(value: string | null): string {
+  if (!value) return "—"
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? "—" : dateTimeFormatter.format(parsed)
+}
