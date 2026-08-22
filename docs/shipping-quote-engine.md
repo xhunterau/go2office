@@ -8,7 +8,7 @@
 | 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
 | 迁移文件 | `20260810100000` ~ `20260810150000`（6 个，**已全部推送远端**） |
 | 参考数据搬运 | 从 xpros 生产库导出，33,424 行邮编分区 + 194 行费率与选项 |
-| 状态 | **阶段 0–1 完成，数据层已就绪；阶段 2 起未开始** —— 见 §0.2 |
+| 状态 | **阶段 0–3 完成，数据层与报价引擎已就绪；阶段 4 起未开始** —— 见 §0.2 |
 
 ---
 
@@ -44,9 +44,9 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 |---|---|
 | 0 · 范围与决策（§0 六条）、环境变量（§0.1） | ✅ 完成 2026-08-15 |
 | 1 · 6 个迁移 + 抽数脚本 + `database.types.ts` | ✅ 完成 2026-08-16，已推送远端（见 §3.4） |
-| 2 · 引擎纯函数 + 适配器 + 单测 | ⬜ 未开始 ← **下次从这里继续** |
-| 3 · Aramex 客户端 | ⬜ 未开始（凭证已就绪，不再阻塞） |
-| 4 · Trigger.dev 接入 + task | ⬜ 未开始 |
+| 2 · 引擎纯函数 + 适配器 + 单测 | ✅ 完成 2026-08-22（见 §0.3） |
+| 3 · Aramex 客户端 | ✅ 完成 2026-08-22，随阶段 2 一并交付（见 §0.3） |
+| 4 · Trigger.dev 接入 + task | ⬜ 未开始 ← **下次从这里继续** |
 | 5 · Server Actions + 面板 UI | ⬜ 未开始 |
 | 6 · 验收（§10） | ⬜ 未开始 |
 
@@ -62,15 +62,42 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 `Register_Letter` 的 `fixed_price_aud` 已确认为 **$5.00**（沿用 xhunter），写进 `20260810120000`（§9.1）。
 
-### 恢复工作时先读这三条
+## 0.3 阶段 2–3 交付清单（2026-08-22）
 
-阶段 2 要移植 `src/lib/shipping/*`。以下三点在阶段 1 已查清并写进本文档，**动手前先看，否则会照着 xpros 抄进已知的坑**：
+阶段 3 的 Aramex 客户端与阶段 2 一并交付：报价引擎的 `api` 分支直接调它，拆成两次做会让引擎在中间状态下无法完整运行。
 
-1. **§4.3 第 11、12 条** —— `service_type` 大小写在 xpros 是分裂的，本库已统一为小写 + CHECK。两处 `.toLowerCase()` 不要抄，`calculate-rate.ts` 整个文件不要移植（它是带 bug 的死代码）。
-2. **§9.3** —— `Mypost_Reg_Xs_Satchel` 的三个尺寸值在 xpros 是错位的，本库有意留空，几何判定交给 `flat_rate_package_specs`。不要"补全"它。
-3. **§3.4** —— 分区数据有一层补齐迁移（`20260810150000`）叠在抽数脚本产物之上。澳邮**没有 ACT 分区**，堪培拉归 NSW Metro；重跑抽数脚本会再次产出缺 512 行的文件。
+| 产物 | 位置 | 说明 |
+|---|---|---|
+| 类型 | [src/lib/shipping/types.ts](../src/lib/shipping/types.ts) | 无 `originWarehouseId`（决策 1）。`shippingMethod` 用 `shipping_method` 枚举而非 `string`；`serviceType` 用小写字面量联合 |
+| 邮政地址识别 | [src/lib/shipping/postal-address.ts](../src/lib/shipping/postal-address.ts) | 变参，吃四行地址 |
+| 承运商能力 + 路由 | [src/lib/shipping/carrier-capabilities.ts](../src/lib/shipping/carrier-capabilities.ts) | `CARRIER_CAPABILITIES` / `canQuote` / `shouldEscalatePostalToManual` / `quoteStrategyFor` / `sortedEdges` |
+| 选优（纯函数） | [src/lib/shipping/quote-selection.ts](../src/lib/shipping/quote-selection.ts) | `filterFlatRateGroups` / `selectBestQuote` |
+| 单位换算 | [src/lib/shipping/dimensions.ts](../src/lib/shipping/dimensions.ts) | 只留 `mmToCm`；xpros 的 `mmToCmString` 无调用方，未移植 |
+| 分区解析 | [src/lib/shipping/adapters/zone-resolver.ts](../src/lib/shipping/adapters/zone-resolver.ts) | §4.2 的三处改写全部落地 |
+| 费率卡适配器 | [src/lib/shipping/adapters/rate-card.adapter.ts](../src/lib/shipping/adapters/rate-card.adapter.ts) | |
+| 定额适配器 | [src/lib/shipping/adapters/flat-rate.adapter.ts](../src/lib/shipping/adapters/flat-rate.adapter.ts) | 几何判定抽成纯函数 `fitsFlatRatePackage` |
+| Aramex 适配器 | [src/lib/shipping/adapters/aramex.adapter.ts](../src/lib/shipping/adapters/aramex.adapter.ts) | `determineSatchelSize` / `buildAramexItem` 可单测 |
+| Aramex 客户端 | [src/lib/aramex/client.ts](../src/lib/aramex/client.ts) · [types.ts](../src/lib/aramex/types.ts) | 只保留报价链路 |
+| 引擎主流程 | [src/lib/shipping/quote-engine.ts](../src/lib/shipping/quote-engine.ts) | |
+| 单测 | `src/lib/shipping/__tests__/`（6 个文件） | `npm test` 104 passed；`npx tsc --noEmit` 与 `npx eslint` 均通过 |
 
-§9.2 剩余 4 项均不阻塞阶段 2：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项属阶段 4–5。
+### 与 §4 计划的六处偏离（都是有意的）
+
+1. **`quote-engine.test.ts` 拆成 `quote-selection.test.ts`**。选优与分组是纯函数，已移到独立模块 `quote-selection.ts`，不必为测它们伪造一个 Supabase client。「固定价短路」这条不变量改由 `quoteStrategyFor` 的用例守住——它把「先判 `fixedPriceAud`，再判承运商」的顺序固定下来，而这正是 `reg_letter` 在三张费率表里 0 行仍然正确的原因。另加 `zone-resolver.test.ts`（§4.2 的补零/大写口径）与 `aramex.test.ts`（袋号分档、mm→cm）。
+2. **`isPostalOnlyAddress` 的模式加了 `(?![a-z])` 后瞻**。xpros 的 `/PO\s*Box/i` 会把 `PO Boxwood Street` 判成邮政信箱，于是那张订单的 Aramex 被静默剔除——报价少一行，看起来和「包裹太重」毫无区别。后瞻仍放行 `PO Box123`。§4.6 本来就把这条列为必测的假阳性。
+3. **引擎不再接 `preloaded` 参数**。xpros 用它做批量报价预热，go2office 的调用方只有单张订单的 task，留着就是死参数。
+4. **`selectBestQuote` 不再回查 `eligible` 求 `carrierCode`**，改为 `QuoteResult` 自带 `carrierCode`。同时它接收 `tiebreakThreshold` 而不是读硬编码常量（§4.3 第 8 条）。
+5. **`selectBestQuote` 返回 `null` 而非在空列表上崩**。xpros 靠调用方先判空，本版把它做成函数自己的契约。
+6. **新增「清掉上一批的 `is_selected`」一步**。`order_shipping_quotes_one_selected_idx` 是 `(order_id) WHERE is_selected` 的唯一索引（§2.7），xpros 没有这个索引也就没有这一步——照抄的话，任何一张订单**第二次**报价都会在写入选中项时撞唯一约束。
+
+### 阶段 4 动手前先读这两条
+
+1. **§6.2** —— 必须 `import { task } from "@trigger.dev/sdk"`，严禁 xpros 全库在用的 `@trigger.dev/sdk/v3`。
+2. **§5.1 末尾** —— Trigger.dev 控制台的 Environment Variables 还没配（`SUPABASE_SERVICE_ROLE_KEY`、`NEXT_PUBLIC_SUPABASE_URL`、四个 `ARAMEX_*`）。部署环境读不到本地 `.env.local`。
+
+`quote-engine.ts` 里有两处留给后续阶段的约定，改动前先看代码注释：**引擎不写 `orders.shipping_method`**（自动选中只是建议，落到订单上是操作员的动作，属阶段 5 的 Server Action）；**Aramex 报价用 `packed_*` 而非 `dominant_*`**（§4.5）。
+
+§9.2 剩余 4 项：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项属阶段 4–5。
 
 ---
 
@@ -484,20 +511,24 @@ NSW Metro 自 Melbourne 发出 = **`Near State Metro`**，三条独立证据一�
 
 ### 4.1 文件清单
 
+> 实际落地清单与偏离说明见 **§0.3**。下表是计划时的对照，`✅` 为已交付。
+
 | 新文件 | 源文件 | 说明 |
 |---|---|---|
-| `src/lib/shipping/types.ts` | `adapters/types.ts` | |
-| `src/lib/shipping/carrier-capabilities.ts` | 同名 | 承运商能力表 + `canQuote` + 人工升级判定 |
-| `src/lib/shipping/postal-address.ts` | 同名 | PO Box / Locked Bag 等模式识别 |
-| `src/lib/shipping/quote-engine.ts` | 同名 | 主流程 |
-| `src/lib/shipping/adapters/zone-resolver.ts` | 同名 | **有改写，见 4.2** |
-| `src/lib/shipping/adapters/rate-card.adapter.ts` | 同名 | |
-| `src/lib/shipping/adapters/flat-rate.adapter.ts` | 同名 | MyPost 定额袋/箱 |
-| `src/lib/shipping/adapters/aramex.adapter.ts` | 同名 | |
-| `src/lib/aramex/client.ts` / `types.ts` | `lib/aramex-client.ts` / `aramex-types.ts` | 只保留报价所需部分 |
-| `src/lib/queries/shipping-quotes.ts` | — | 按 go2office 的查询层惯例 |
-| `src/lib/actions/shipping-quote.ts` | `shipping-actions.ts` | 按 go2office 的 `src/lib/actions/` 惯例 |
-| `src/trigger/quote-shipping.ts` | 同名 | |
+| ✅ `src/lib/shipping/types.ts` | `adapters/types.ts` | |
+| ✅ `src/lib/shipping/carrier-capabilities.ts` | 同名 | 承运商能力表 + `canQuote` + 人工升级判定 + 适配器路由 |
+| ✅ `src/lib/shipping/postal-address.ts` | 同名 | PO Box / Locked Bag 等模式识别 |
+| ✅ `src/lib/shipping/quote-selection.ts` | `quote-engine.ts` 内的私有函数 | 计划外新增：把分组与选优抽成纯函数，便于单测 |
+| ✅ `src/lib/shipping/dimensions.ts` | 同名 | mm → cm |
+| ✅ `src/lib/shipping/quote-engine.ts` | 同名 | 主流程 |
+| ✅ `src/lib/shipping/adapters/zone-resolver.ts` | 同名 | **有改写，见 4.2** |
+| ✅ `src/lib/shipping/adapters/rate-card.adapter.ts` | 同名 | |
+| ✅ `src/lib/shipping/adapters/flat-rate.adapter.ts` | 同名 | MyPost 定额袋/箱 |
+| ✅ `src/lib/shipping/adapters/aramex.adapter.ts` | 同名 | |
+| ✅ `src/lib/aramex/client.ts` / `types.ts` | `lib/aramex-client.ts` / `aramex-types.ts` | 只保留报价所需部分 |
+| `src/lib/queries/shipping-quotes.ts` | — | 阶段 5。按 go2office 的查询层惯例 |
+| `src/lib/actions/shipping-quote.ts` | `shipping-actions.ts` | 阶段 5。按 go2office 的 `src/lib/actions/` 惯例 |
+| `src/trigger/quote-shipping.ts` | 同名 | 阶段 4 |
 
 ### 4.2 ⚠️ `zone-resolver` 的三处改写（不改就是错的）
 
