@@ -1469,6 +1469,17 @@ export type Database = {
         }
         Relationships: []
       }
+      // Distinct zones a carrier has, taken from postcode_carrier_zones UNION
+      // the zones its rate card already prices (migration 20260812100000). The
+      // second half matters: a zone with a rate but no postcodes behind it is
+      // still reachable by the engine, so the rate card page has to show it.
+      carrier_zones: {
+        Row: {
+          carrier_id: number
+          zone: string
+        }
+        Relationships: []
+      }
     }
     Functions: {
       charm_price: {

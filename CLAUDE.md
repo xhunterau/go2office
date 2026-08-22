@@ -136,6 +136,15 @@
 
 # 22. Supabase 的 GRANT 是装饰，RLS 才是闸门
 - **默认全权**：Supabase 对 `public` 下**每张新表**预置 `ALTER DEFAULT PRIVILEGES`，给 `anon` / `authenticated` / `service_role` 全部权限（`pg_default_acl` 里是 `arwdDxtm`）。因此 `supabase/migrations/*` 里那些 `GRANT SELECT ON x TO authenticated` **只是在重述已经成立的事实**，删掉不会改变任何行为，加上也挡不住任何东西。
-- **真正在挡的是 RLS**：开了 row level security 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表正是这个状态——结论没错，但机制不是 `GRANT` 那行。**要让一张表只读，写策略；不要指望不写 GRANT。**
+- **真正在挡的是 RLS**：开了 row level security 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表在 `20260812100000` 之前正是这个状态（`postcode_carrier_zones` 至今仍是）——结论没错，但机制不是 `GRANT` 那行。**要让一张表只读，写策略；不要指望不写 GRANT。**
 - **列级 GRANT 是叠加的，单独写没有意义**：`GRANT UPDATE (col)` 挡不住已经存在的表级 UPDATE。要真正把可写列收窄，必须**先 `REVOKE UPDATE ON t FROM authenticated` 再 `GRANT UPDATE (col) ...`**，顺序不可反（REVOKE 表级会连列级条目一起撤掉）。范例见迁移 `20260811110000`。
 - **验证方式**：查 `information_schema` 看不出真实效果（列级与表级条目会同时存在）。唯一可靠的办法是用 `pg` 连 `DATABASE_URL`、`SET ROLE authenticated`，再逐条试 SELECT / UPDATE 各列 / INSERT / DELETE，看哪些真被拒。2026-08-22 就是这样才发现 `20260811100000` 的列级 GRANT 完全无效。
+- **RLS 拒绝 UPDATE / DELETE 的方式是返回 0 行，不是报错**（只有 INSERT 会抛 `new row violates row-level security policy`；列级 GRANT 被踩则抛 `permission denied for table`）。因此**断言必须打在确实存在的行上**——拿一个不存在的 WHERE 去 DELETE 也是 0 行，「被拦住」和「没匹配到」长得一模一样，探测脚本极易写成永远通过。同理，Server Action 里的 update / delete 必须写 `.select("id").maybeSingle()`：拿不到行就返回 not found，否则一次被 RLS 拦下的写入会静默地 toast 成功。
+
+# 23. 运费参考数据的可写面（/settings/shipping）
+- **范围**：`carriers` / `carrier_services` / `carrier_zone_rates` / `carrier_dispatch_options` / `flat_rate_package_specs` / `shipping_settings` 六张表由 `/settings/shipping/*` 维护（迁移 `20260812100000` 开的写策略）。`postcode_carrier_zones` **是只读的**——它的 33,424 行由 `scripts/reference/export-carrier-zones.mjs` 生成，给它开写入面等于让手改被下次导出静默覆盖。详见 `docs/shipping-quote-engine.md` §0.7。
+- **`carriers.code` 建后不可改，这是代码耦合键**：`src/lib/shipping/carrier-capabilities.ts` 的 `CARRIER_CAPABILITIES` 按它取重量与尺寸上限，`quoteStrategyFor` 还有一处 `=== 'aramex'`。改一个字母就让该承运商脱离自己的限制，**报价照出、只是数字变了，不报任何错**。迁移里用规则 22 的 `REVOKE UPDATE` + `GRANT UPDATE (name, is_active)` 收窄，UI 侧编辑态把该字段设为只读且不提交。新增这类「代码按值分支」的列时照此办理。
+- **`carrier_services.service_type` 两侧必须同为小写**：`carrier_dispatch_options.service_type` 靠等值 JOIN 它，两张表各有一条 `= lower(...)` 的 CHECK。xpros 一侧存 `Standard`、另一侧存 `standard`，靠两处 `.toLowerCase()` 打补丁，第三个调用方没打、于是查不到任何档位——那是它成为死代码的唯一原因。本项目 UI 侧在失焦时小写化，调度选项那一栏是**闭合下拉**（只列该承运商真有的 service_type），不是自由文本。
+- **`flat_rate_package_specs.maps_to_weight_kg` 必须精确等于某个 `carrier_services.max_weight`**：定额适配器就是用它去 `.eq("max_weight", spec.maps_to_weight_kg)` 定档的。对不上时只在报价行里写一句 `No standard tier at 5kg`，页面别处毫无提示——所以袋箱规格页会主动标出这类行。改任一侧的数值时必须核对另一侧。
+- **`carrier_zone_rates` 的空行与 `$0` 不是一回事**：没有行 = 该档不服务这个分区、引擎跳过；`rate = 0` = 零元报价，**稳赢所有比价**。`carrier_zone_rates_has_pricing` 这个 CHECK 就是为拦住「两种计价方式都没填、于是按 0 出价」而存在的，zod 两侧都镜像了它。
+- **改这些表不回溯**：`order_shipping_quotes` 存的是当天报出的价，不会因费率变动而重算——这是刻意的（报价是「当时收了多少」的记录）。页面上写明了这一点。

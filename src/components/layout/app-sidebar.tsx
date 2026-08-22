@@ -48,6 +48,10 @@ const inventoryItems = [
 // group rather than to a new URL when Postcodes joined it.
 const settingsItems = [
   { title: "System Constants", href: "/settings" },
+  // One entry for the whole shipping reference domain rather than six. Its own
+  // page is a hub linking to them, which keeps this list readable and gives the
+  // six screens somewhere to explain how they fit together.
+  { title: "Shipping", href: "/settings/shipping" },
   { title: "Postcodes", href: "/settings/postcodes" },
   { title: "Countries", href: "/settings/countries" },
 ]

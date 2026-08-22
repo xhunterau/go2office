@@ -5,10 +5,10 @@
 | | |
 |---|---|
 | 源实现 | `xpros` 的 `src/lib/shipping/*` + `src/trigger/quote-shipping.ts` + `src/app/sales-orders/[id]/shipping-quotes-panel.tsx` |
-| 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
-| 迁移文件 | `20260810100000` ~ `20260810150000` + `20260811100000` / `20260811110000`（8 个，**已全部推送远端**） |
+| 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 + `/settings/shipping` 六个参考数据页 |
+| 迁移文件 | `20260810100000` ~ `20260810150000` + `20260811100000` / `20260811110000` + `20260812100000`（9 个，**已全部推送远端**） |
 | 参考数据搬运 | 从 xpros 生产库导出，33,424 行邮编分区 + 194 行费率与选项 |
-| 状态 | **阶段 0–4 完成；阶段 5 代码完成、浏览器交互待人工点一遍** —— 见 §0.2 |
+| 状态 | **阶段 0–4、7 完成；阶段 5 与 7 的浏览器交互待人工点一遍** —— 见 §0.2 |
 
 ---
 
@@ -49,6 +49,7 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 | 4 · Trigger.dev 接入 + task | ✅ 完成 2026-08-22（见 §0.5） |
 | 5 · Server Actions + 面板 UI | 🟡 代码完成 2026-08-22，**浏览器交互未验证**（见 §0.6） |
 | 6 · 验收（§10） | 🟡 剩浏览器侧两项 |
+| 7 · `/settings/shipping` 参考数据维护 UI | 🟡 代码完成 2026-08-22，迁移已推远端并做过权限探测；**浏览器交互未验证**（见 §0.7） |
 
 ### 阶段 1 交付清单（2026-08-16）
 
@@ -144,7 +145,7 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 这次收窄可写列时才发现，它影响的是**本仓库全部迁移**，不止运费域：
 
-Supabase 对 `public` 下每张新表预置 `ALTER DEFAULT PRIVILEGES`，给 `anon` / `authenticated` / `service_role` **全部权限**（`pg_default_acl` 里是 `arwdDxtm`）。所以迁移里那些 `GRANT SELECT ON x TO authenticated` 只是在重述已经成立的事实。真正在挡的是 RLS——开了 RLS 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表正是这个状态，**结论没错，但机制不是注释里写的那个**。
+Supabase 对 `public` 下每张新表预置 `ALTER DEFAULT PRIVILEGES`，给 `anon` / `authenticated` / `service_role` **全部权限**（`pg_default_acl` 里是 `arwdDxtm`）。所以迁移里那些 `GRANT SELECT ON x TO authenticated` 只是在重述已经成立的事实。真正在挡的是 RLS——开了 RLS 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表当时正是这个状态，**结论没错，但机制不是注释里写的那个**。（2026-08-22 起它们已由 `20260812100000` 开出写策略，见 §0.7；`postcode_carrier_zones` 仍是这个只读状态。）
 
 由此 `20260811100000` 的 `GRANT UPDATE (is_selected)` **完全无效**：列级 GRANT 是叠加的，挡不住已经存在的表级 UPDATE。推上去后实测 `quoted_rate` 照样能改 22 行。`20260811110000` 先 `REVOKE UPDATE ON ... FROM authenticated` 再重给列级才生效（REVOKE 表级会连列级一起撤，顺序不可反）。
 
@@ -182,6 +183,77 @@ Supabase 对 `public` 下每张新表预置 `ALTER DEFAULT PRIVILEGES`，给 `an
 - 验收清单里「PO Box + 超重订单落到 `issued` 并在 `order_logs` 留痕」——这条会真的改一张订单的状态，等有 UI 能看见结果时再做
 - §9.2 剩余 4 项：第 1、2 项是 seed 里的数值（改一行即可），第 3、4 项已随阶段 4–5 完成
 - Trigger.dev 控制台的 Environment Variables（6 个，见 [current_tasks.md](current_tasks.md)）——不配就无法 `deploy`
+
+---
+
+## 0.7 阶段 7 交付清单（2026-08-22）
+
+参考数据维护 UI。xpros 有 `src/app/admin/shipping/` 下的七个页面，go2office 此前一个也没有——这六张表只能靠写迁移来改。
+
+| 产物 | 位置 |
+|---|---|
+| 迁移 | `20260812100000_open_shipping_reference_writes.sql`（**已推远端**） |
+| 类型 | `database.types.ts` 手工补 `carrier_zones` 视图（规则 18） |
+| 查询层 | [src/lib/queries/shipping-reference.ts](../src/lib/queries/shipping-reference.ts) · [postcode-carrier-zones.ts](../src/lib/queries/postcode-carrier-zones.ts) |
+| 校验 | [src/lib/validations/shipping-reference.ts](../src/lib/validations/shipping-reference.ts)（服务端 coerce + 表单侧字符串，两套） |
+| Server Actions | `src/lib/actions/` 下 `carrier.ts` / `rate-card.ts` / `dispatch-option.ts` / `package-spec.ts` / `shipping-settings.ts` |
+| 页面 | `src/app/(dashboard)/settings/shipping/` —— hub + `carriers` / `rate-cards` / `dispatch-options` / `package-specs` / `constants` / `zones` |
+| 侧边栏 | Settings 组新增一条 **Shipping**（指向 hub，不把六条平铺进去） |
+| 单测 | [src/lib/validations/__tests__/shipping-reference.test.ts](../src/lib/validations/__tests__/shipping-reference.test.ts)，16 条 |
+
+`npm run build` / `tsc` / `eslint` / `npm test`（121）全绿。
+
+### 用户定的两处裁剪
+
+1. **不做费率卡 CSV 导入**（xpros 的 `rate-card-import-dialog.tsx`）。改费率是逐格点开改。
+2. **分区页只读**。33,424 行由 [export-carrier-zones.mjs](../scripts/reference/export-carrier-zones.mjs) 生成，改法是重新导出，因此 `postcode_carrier_zones` 在迁移里**没有**写策略。
+
+### 写入面：开到哪、为什么停在那
+
+| 表 | INSERT | UPDATE | DELETE | 备注 |
+|---|:--:|:--:|:--:|---|
+| `carriers` | ✅ | 仅 `name` / `is_active` | ❌ | 见下 |
+| `carrier_services` | ✅ | ✅ | ✅ | |
+| `carrier_zone_rates` | ✅ | ✅ | ✅ | |
+| `carrier_dispatch_options` | ✅ | ✅ | ✅ | |
+| `flat_rate_package_specs` | ✅ | ✅ | ✅ | |
+| `shipping_settings` | ❌ | ✅ | ❌ | 单行表，与 `pricing_settings` 同待遇 |
+| `postcode_carrier_zones` | ❌ | ❌ | ❌ | 只读浏览 |
+
+两处不对称是有意的：
+
+- **`carriers.code` 不可改**。`CARRIER_CAPABILITIES`（[carrier-capabilities.ts](../src/lib/shipping/carrier-capabilities.ts)）与 `quoteStrategyFor` 的 `=== 'aramex'` 都按它取值，改一个字母就让该承运商脱离自己的重量与尺寸上限，而且**不报错**——报价照出，只是数字变了。用规则 22 的 `REVOKE UPDATE` + `GRANT UPDATE (name, is_active)` 收窄，新建时可设、之后只读。
+- **`carriers` 不给 DELETE**。级联会带走它的费率卡、调度选项与约 1.6 万行分区，UI 无法撤销。停用走 `is_active`。
+
+### 权限探测结果（2026-08-22，`SET ROLE authenticated` 逐条试，全程 rollback）
+
+推完立刻按规则 22 探测，四条关键断言均成立：
+
+```
+REFUSED           UPDATE carriers.code
+BLOCKED (0 rows)  DELETE carriers（针对真实存在的行）
+BLOCKED (0 rows)  UPDATE / DELETE postcode_carrier_zones
+REFUSED           INSERT postcode_carrier_zones / shipping_settings
+BLOCKED (0 rows)  DELETE shipping_settings
+```
+
+**探测脚本第一版有个陷阱，值得记下来**：`DELETE ... WHERE code = 'probe_tmp'` 返回 0 行被当成了「被拦住」，其实那行在上一个事务里已被 rollback，根本不存在。**RLS 拒绝写入的方式是把行过滤掉、返回 0 行，不是抛错**——所以「被拦」和「没匹配到」长得一模一样。断言必须打在确实存在的行上。这也是本轮所有 update / delete action 都写 `.select("id").maybeSingle()` 的原因：拿不到行就返回 not found，而不是静默成功。
+
+### 三处 go2office 特有、xpros 没有的
+
+1. **承运商页显示用量**：每个承运商带 `n of m` 个在用调度选项、费率档数、分区行数。「承运商是 active、但它名下的调度选项全关了」在别处看不出来。
+2. **袋箱规格页标出「报不出价」的行**：定额适配器要求 `maps_to_weight_kg` 与某个 `carrier_services.max_weight` **精确相等**才能定档，对不上时只会在报价行里写一句 `No standard tier at 5kg`。页面直接在该行打警告并说清原因。
+3. **费率矩阵区分空格与 $0**：空格是「该档不服务这个分区、引擎跳过」，`$0.00` 是「零元报价、稳赢比价」。这条写在表格下方，因为 `carrier_zone_rates_has_pricing` 这个 CHECK 就是为它存在的。
+
+### 交付前跑真实数据抓到的一处
+
+承运商页的「分区行数」第一版写成 `select("carrier_id")` 再在内存里计数，跑出来是 `1000 / 0 / 0 / 0`——**PostgREST 默认单次最多返回 1000 行**，而 `postcode_carrier_zones` 有 33,424 行，于是拿到的是排在最前面那个承运商的第一页，看起来完全像一份真实数据。改成按承运商 `count: "exact", head: true` 后是正确的 `16,712 / 16,712 / 0 / 0`。
+
+**教训**：对**可能超过 1000 行**的表做「取回来自己数」一律是错的，且错得不像错。这类页面在开发库上（行数少）永远看不出问题。
+
+### 未验证的部分
+
+服务端四类写入已按 `authenticated` 角色逐条探测，六个页面的读取路径已用 service_role 对真实数据跑通一遍（承运商 4 / 费率档 22 / 调度选项 25 / 袋箱规格 9 / 分区 33,424，袋箱 9 行全部 `2/2 priced`），构建与单测全绿。**但浏览器里没点过**：六个页面的增删改、确认框、toast，以及 CLAUDE.md 规则 12 要求的移动端 + 桌面端各验一次，都还没做。登录态需要真人。
 
 ---
 
@@ -844,6 +916,10 @@ const run = await tasks.trigger<typeof quoteShippingTask>("quote-shipping", { ..
 
 xpros 没有这两个提示，是因为它没有这两个字段——go2office 的指标表是为此专门设计的，不用可惜。
 
+### 7.3 参考数据维护 UI
+
+本节只讲订单详情页那个面板。承运商、费率卡、调度选项、袋箱规格、全局常量与邮编分区这六张表的维护页在 **§0.7**（阶段 7，2026-08-22 补），落在 `/settings/shipping/*`。
+
 ---
 
 ## 8. 分阶段交付
@@ -949,4 +1025,4 @@ fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
 
 - **不建 `warehouses` 表**（决策 1）。若将来真要开第二个仓，`carrier_dispatch_options` 与 `postcode_carrier_zones` 都需要加回 `origin_warehouse_id`，届时 eParcel 的分区数据要重新从 xpros 抽（那边按仓存了 5 份）。这一点写进迁移注释。
 - **不动 `order_metrics_summary`**。引擎所需的全部包裹指标它已经具备，本次一列不加。
-- **不做承运商 / 费率的后台 CRUD 页面**。费率是一年调一次的静态数据，改一次写一个迁移即可（与 `postcodes` / `countries` 不同——那两张表用户要日常维护，才配了 `/settings/*` 页面）。若后续确有需求，再按 `/settings/countries` 的模式补。
+- ~~**不做承运商 / 费率的后台 CRUD 页面**~~（**2026-08-22 已推翻，见 §0.7**）。原判断是「费率一年调一次，写迁移即可」；用户要求补齐后，六个页面按 `/settings/countries` 的模式落在 `/settings/shipping/*`。唯一保留下来的只读页是分区表——它不是「不值得做 UI」，而是数据由抽数脚本生成，手改会被下次导出覆盖。
