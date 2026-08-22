@@ -90,6 +90,26 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 5. **`selectBestQuote` 返回 `null` 而非在空列表上崩**。xpros 靠调用方先判空，本版把它做成函数自己的契约。
 6. **新增「清掉上一批的 `is_selected`」一步**。`order_shipping_quotes_one_selected_idx` 是 `(order_id) WHERE is_selected` 的唯一索引（§2.7），xpros 没有这个索引也就没有这一步——照抄的话，任何一张订单**第二次**报价都会在写入选中项时撞唯一约束。
 
+## 0.4 首次真实数据试跑（2026-08-22）
+
+[scripts/shipping/quote-order.ts](../scripts/shipping/quote-order.ts) 用 service_role 直接调 `runQuoteEngine`，**默认 dry run**：引擎会写 `order_shipping_quotes` / `order_logs`，还会在报不出价时把 `orders.status` 改成 `issued`，所以脚本把所有写操作拦下来打印，`--commit` 才放行。`--pick` 按验收清单的五个形态各挑一张订单。Aramex 无论哪种模式都会真打线上询价接口（只读，不产生运单）。**该脚本在阶段 4–5 接完后即可删除。**
+
+五张订单全部跑通，引擎行为符合预期：
+
+| 订单 | 形态 | 结果 |
+|---:|---|---|
+| 205970 | 114g / $10.47 / 200×200×4mm / Cardwell QLD | `Register_Letter` $5.00 被选中，第二名 $9.69——差距远超 5%，符合 §4.3 第 7 条 |
+| 205975 | 220g / PO Box 地址 | Aramex 两项被正确剔除，`Eparcel_Regular` $9.83 胜 `Mypost_Regular` $9.69（差 1.4%，落在平局带内，按承运商优先级判给 eParcel） |
+| 205810 | 实重 1.8kg / 计费重 5.04kg | `Mypost_Regular` / `Mypost_Express` 按计费重被 5kg 上限剔除，但定额袋箱按**实重**参与并报出几何不匹配错误——两种口径分别生效，符合设计 |
+| 204226 | 1200mm | eParcel / MyPost 全被 1040mm 上限剔除，只剩 Aramex 两项 |
+| 205185 | $215.60 | Aramex 两项被 `max_order_total_aud = 200` 剔除 |
+
+**发现并已修的一处**：Aramex 返回六位小数（实测 `70.806197`），而 `order_shipping_quotes.quoted_rate` 是 `numeric(10, 2)`。不取整的话，引擎用来排序和写进 `order_logs` 的数字与落库的数字不是同一个。已在适配器里补 `Math.round(x * 100) / 100`，与两个费率卡适配器一致，并补了用例。
+
+**留给 xpros 对账时确认的一点**：Aramex 取的是响应里的 `total`（含税），而 eParcel / MyPost 的费率卡是协议价。若费率卡是不含税价，跨承运商比价就偏向 Australia Post 10%。xpros 用的也是 `total`，所以逐分对账时两边会一致、这个问题不会暴露——需要单独确认，不能靠对账兜住。
+
+---
+
 ### 阶段 4 动手前先读这两条
 
 1. **§6.2** —— 必须 `import { task } from "@trigger.dev/sdk"`，严禁 xpros 全库在用的 `@trigger.dev/sdk/v3`。
@@ -833,9 +853,9 @@ fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
 - [x] `postcode_carrier_zones` 行数 = 33,424（导入 32,912 + 补齐 512，§3.4），且 `(postcode_id, carrier_id)` 无重复
 - [x] §3.3 查询二：已逐条看过 —— 查出两处源表缺口，均已按澳邮官方分区定义补齐（§3.4），客户侧「仅某一家可解析」归零
 - [x] 抽数脚本对「xpros 有、go2office 解析不到」的 `(postcode, locality)` 组合有完整输出：0 行
-- [ ] `npm test` 全绿，含新增的 shipping 用例
-- [ ] 取 10 张历史订单（覆盖：轻小件 / 5kg 边界 / 超 1040mm / PO Box 地址 / 金额 > $200），在 go2office 与 xpros 各跑一次报价，**同一承运商的价格逐分对齐**
-- [ ] 一张 ≤0.5kg、≤$100、厚度 ≤20mm 的订单能报出 `Register_Letter`；把金额抬到 $101 后该选项消失（`max_order_total_aud` 生效）
+- [x] `npm test` 全绿，含新增的 shipping 用例（105 passed，2026-08-22）
+- [ ] 取 10 张历史订单（覆盖：轻小件 / 5kg 边界 / 超 1040mm / PO Box 地址 / 金额 > $200），在 go2office 与 xpros 各跑一次报价，**同一承运商的价格逐分对齐** —— go2office 侧已用 [scripts/shipping/quote-order.ts](../scripts/shipping/quote-order.ts) 跑通 5 张（见 §0.4），xpros 侧未跑
+- [x] 一张 ≤0.5kg、≤$100、厚度 ≤20mm 的订单能报出 `Register_Letter`（订单 205970，$5.00 且被自动选中）；金额上限一侧尚未反向验证
 - [x] `carrier_services` / `carrier_zone_rates` / `postcode_carrier_zones` 中 `reg_letter` 与 `aramex` 的行数**均为 0**（§2.5.1）
 - [ ] 一张 PO Box + 超重订单能正确落到 `issued` 并在 `order_logs` 留痕
 - [ ] 面板：Re-Quote → 轮询 → 自动选中 → `orders.shipping_method` 被回写；Clear Quotes 走全局确认框

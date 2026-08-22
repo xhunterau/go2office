@@ -100,7 +100,11 @@ export async function aramexQuote(
     shippingMethod: option.shippingMethod,
     serviceId: null,
     zone: null,
-    quotedRate: response.data.total,
+    // Aramex answers to six decimal places (70.806197). order_shipping_quotes is
+    // numeric(10,2), so the stored figure is rounded either way -- rounding here
+    // is what keeps the number the engine ranks and logs identical to the number
+    // in the row. The rate-card adapters round for the same reason.
+    quotedRate: Math.round(response.data.total * 100) / 100,
     computationType: "api",
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  aramexQuote,
   buildAramexItem,
   determineSatchelSize,
 } from "@/lib/shipping/adapters/aramex.adapter"
@@ -60,6 +61,56 @@ describe("buildAramexItem", () => {
   it("omits a dimension the metrics could not measure rather than sending 0", () => {
     const item = buildAramexItem("Aramex_Parcel", pkg({ packedHeightMm: 0 }))
     expect(item.Height).toBeUndefined()
+  })
+})
+
+describe("aramexQuote", () => {
+  it("rounds the API's six-decimal answer to cents", async () => {
+    // The real response for order 204226 was 70.806197. Left unrounded, the
+    // engine ranks and logs a figure the numeric(10,2) column cannot hold.
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.includes("token")) {
+        return new Response(
+          JSON.stringify({ access_token: "t", expires_in: 3600, token_type: "Bearer" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      }
+      return new Response(
+        JSON.stringify({ data: { price: 64.37, tax: 6.44, total: 70.806197, items: [] } }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    }) as typeof fetch
+
+    process.env.ARAMEX_TOKEN_URL = "https://example.invalid/token"
+    process.env.ARAMEX_API_BASE_URL = "https://example.invalid"
+    process.env.ARAMEX_CLIENT_ID = "id"
+    process.env.ARAMEX_CLIENT_SECRET = "secret"
+
+    try {
+      const quote = await aramexQuote(
+        {
+          id: 1,
+          shippingMethod: "Aramex_Parcel",
+          carrierId: 3,
+          carrierCode: "aramex",
+          billingWeightMode: "chargeable",
+          serviceType: null,
+          fixedPriceAud: null,
+          maxOrderTotalAud: 200,
+          maxPackedThicknessMm: null,
+          maxPackedLengthMm: null,
+          maxPackedWidthMm: null,
+        },
+        pkg(),
+        { addressLine1: "1 Test Street", city: "MELBOURNE", state: "VIC", postcode: "3000" }
+      )
+      expect(quote.quotedRate).toBe(70.81)
+      expect(quote.computationType).toBe("api")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 
