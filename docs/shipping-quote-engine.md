@@ -8,7 +8,7 @@
 | 落地对象 | 9 张新表 + `src/lib/shipping/*` + 首个 Trigger.dev task + 订单详情页新面板 |
 | 迁移文件 | `20260810100000` ~ `20260810150000`（6 个，**已全部推送远端**） |
 | 参考数据搬运 | 从 xpros 生产库导出，33,424 行邮编分区 + 194 行费率与选项 |
-| 状态 | **阶段 0–3 完成，数据层与报价引擎已就绪；阶段 4 起未开始** —— 见 §0.2 |
+| 状态 | **阶段 0–4 完成，引擎已能由 Trigger.dev task 跑通；阶段 5（UI）未开始** —— 见 §0.2 |
 
 ---
 
@@ -46,8 +46,8 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 | 1 · 6 个迁移 + 抽数脚本 + `database.types.ts` | ✅ 完成 2026-08-16，已推送远端（见 §3.4） |
 | 2 · 引擎纯函数 + 适配器 + 单测 | ✅ 完成 2026-08-22（见 §0.3） |
 | 3 · Aramex 客户端 | ✅ 完成 2026-08-22，随阶段 2 一并交付（见 §0.3） |
-| 4 · Trigger.dev 接入 + task | ⬜ 未开始 ← **下次从这里继续** |
-| 5 · Server Actions + 面板 UI | ⬜ 未开始 |
+| 4 · Trigger.dev 接入 + task | ✅ 完成 2026-08-22（见 §0.5） |
+| 5 · Server Actions + 面板 UI | ⬜ 未开始 ← **下次从这里继续** |
 | 6 · 验收（§10） | ⬜ 未开始 |
 
 ### 阶段 1 交付清单（2026-08-16）
@@ -110,10 +110,30 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 ---
 
-### 阶段 4 动手前先读这两条
+## 0.5 阶段 4 交付清单（2026-08-22）
 
-1. **§6.2** —— 必须 `import { task } from "@trigger.dev/sdk"`，严禁 xpros 全库在用的 `@trigger.dev/sdk/v3`。
-2. **§5.1 末尾** —— Trigger.dev 控制台的 Environment Variables 还没配（`SUPABASE_SERVICE_ROLE_KEY`、`NEXT_PUBLIC_SUPABASE_URL`、四个 `ARAMEX_*`）。部署环境读不到本地 `.env.local`。
+| 产物 | 位置 |
+|---|---|
+| SDK | `@trigger.dev/sdk` v4.5.12（新增依赖） |
+| 配置 | [trigger.config.ts](../trigger.config.ts) |
+| Task | [src/trigger/quote-shipping.ts](../src/trigger/quote-shipping.ts) |
+| 脚本 | `package.json` 的 `trigger:dev` |
+| 文档 | [docs/current_tasks.md](current_tasks.md)（新建，CLAUDE.md 规则 4） |
+| 忽略 | `.gitignore` 加 `.trigger` |
+
+**与 §6.1 计划的一处偏离**：`trigger.config.ts` 的 `project` 写死字面量 `proj_wwabgtzjdqddykvvvpxx`，不读 `process.env.TRIGGER_PROJECT_REF`。这个文件由 CLI 在注入任务环境之前求值，读不到变量时 `project` 是 `undefined`，报错指向配置文件而不是指向缺失的变量。project ref 不是密钥（它就是 dashboard URL 里的 id）。`.env.local` 里的 `TRIGGER_PROJECT_REF` 因此变成冗余，留着无害。
+
+**实测**（dev worker `20260822.1`）：订单 205970 触发两次，各 1.6 秒完成、11 行报价、均选中 `Register_Letter` $5.00。两个批次共 22 行落库，全表仅 1 行 `is_selected` —— §0.3 第 6 条那个「先清上一批」的改动在真实唯一索引上验证通过。`orders` 行未被改动。
+
+**还没做的一步**：Trigger.dev 控制台的 Environment Variables 尚未配置（6 个变量，见 [current_tasks.md](current_tasks.md)）。部署环境读不到 `.env.local`，所以该 Task 目前**只在本地 dev 环境可用**，`npx trigger.dev deploy` 之前必须先补。
+
+---
+
+### 阶段 5 动手前先读这三条
+
+1. **引擎不写 `orders.shipping_method`**。自动选中只是建议，落到订单上是操作员的动作——这一步就在阶段 5 的 Server Action 里，xpros 的对应实现是 `src/app/sales-orders/[id]/shipping-actions.ts` 的第 122 行。
+2. **`order_shipping_quotes_one_selected_idx` 是 `(order_id) WHERE is_selected` 的唯一索引**。手工改选另一个方案时，必须先清掉当前选中项再置位，顺序反了会撞约束。引擎里已经这么做（§0.3 第 6 条），Server Action 不会自动继承这件事。
+3. **面板要显示报错行**。一次报价通常带一批 `does not fit` 的错误行（订单 205975 是 20 行），`filterFlatRateGroups` 有意保留它们——一个定额组内全都装不下时，整组错误都留着，否则面板会无声地少五个选项。UI 需要把错误行折叠而不是丢弃。
 
 `quote-engine.ts` 里有两处留给后续阶段的约定，改动前先看代码注释：**引擎不写 `orders.shipping_method`**（自动选中只是建议，落到订单上是操作员的动作，属阶段 5 的 Server Action）；**Aramex 报价用 `packed_*` 而非 `dominant_*`**（§4.5）。
 
@@ -854,13 +874,13 @@ fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
 - [x] §3.3 查询二：已逐条看过 —— 查出两处源表缺口，均已按澳邮官方分区定义补齐（§3.4），客户侧「仅某一家可解析」归零
 - [x] 抽数脚本对「xpros 有、go2office 解析不到」的 `(postcode, locality)` 组合有完整输出：0 行
 - [x] `npm test` 全绿，含新增的 shipping 用例（105 passed，2026-08-22）
-- [ ] 取 10 张历史订单（覆盖：轻小件 / 5kg 边界 / 超 1040mm / PO Box 地址 / 金额 > $200），在 go2office 与 xpros 各跑一次报价，**同一承运商的价格逐分对齐** —— go2office 侧已用 [scripts/shipping/quote-order.ts](../scripts/shipping/quote-order.ts) 跑通 5 张（见 §0.4），xpros 侧未跑
+- [x] ~~与 xpros 逐分对账~~ —— **用户决定不做**（2026-08-22）：本次是单向迁移，不在 xpros 上跑任何东西。改为在 go2office 单侧核对五个形态的行为是否合理，已用 [scripts/shipping/quote-order.ts](../scripts/shipping/quote-order.ts) 完成（§0.4）
 - [x] 一张 ≤0.5kg、≤$100、厚度 ≤20mm 的订单能报出 `Register_Letter`（订单 205970，$5.00 且被自动选中）；金额上限一侧尚未反向验证
 - [x] `carrier_services` / `carrier_zone_rates` / `postcode_carrier_zones` 中 `reg_letter` 与 `aramex` 的行数**均为 0**（§2.5.1）
-- [ ] 一张 PO Box + 超重订单能正确落到 `issued` 并在 `order_logs` 留痕
+- [ ] 一张 PO Box + 超重订单能正确落到 `issued` 并在 `order_logs` 留痕 —— 未验证：这条要求真的改一张订单的状态，留到阶段 5 有 UI 能看见结果时再做
 - [ ] 面板：Re-Quote → 轮询 → 自动选中 → `orders.shipping_method` 被回写；Clear Quotes 走全局确认框
 - [ ] Dialog / 面板在移动端与桌面端各验一次（CLAUDE.md 规则 12）
-- [ ] `docs/current_tasks.md` 已创建并记录 `quote-shipping`（CLAUDE.md 规则 4）
+- [x] [docs/current_tasks.md](current_tasks.md) 已创建并记录 `quote-shipping`（CLAUDE.md 规则 4）
 - [x] `src/lib/supabase/database.types.ts` 已手工补齐 **9** 张新表（CLAUDE.md 规则 18），`npx tsc --noEmit` 通过
 
 ---
