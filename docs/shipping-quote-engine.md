@@ -106,7 +106,7 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 **发现并已修的一处**：Aramex 返回六位小数（实测 `70.806197`），而 `order_shipping_quotes.quoted_rate` 是 `numeric(10, 2)`。不取整的话，引擎用来排序和写进 `order_logs` 的数字与落库的数字不是同一个。已在适配器里补 `Math.round(x * 100) / 100`，与两个费率卡适配器一致，并补了用例。
 
-**留给 xpros 对账时确认的一点**：Aramex 取的是响应里的 `total`（含税），而 eParcel / MyPost 的费率卡是协议价。若费率卡是不含税价，跨承运商比价就偏向 Australia Post 10%。xpros 用的也是 `total`，所以逐分对账时两边会一致、这个问题不会暴露——需要单独确认，不能靠对账兜住。
+**曾存疑、现已确认**：Aramex 取的是响应里的 `total`（含税），而 eParcel / MyPost 的费率卡是协议价。2026-08-22 用户确认**费率卡含 GST**，两边同口径，比价成立（§9.2 第 6 项）。
 
 ---
 
@@ -882,7 +882,7 @@ xpros 没有这两个提示，是因为它没有这两个字段——go2office �
 | 3 | 「无可用承运商」时自动把订单改成 `issued`，还是不改状态只报错？ | ✅ **改成 `issued`**，即当前实现。`order_logs` 那行痕迹因此是必需的（§2.7） |
 | 4 | 报价是否在订单创建时自动触发？ | ✅ **先只保留手工按钮**。task 的 `triggeredBy: "auto"` 分支保留着，接自动触发时无需改引擎 |
 | 5 | ~~`Mypost_Reg_Xs_Satchel` 的三个尺寸值错位~~ | ✅ 已定：**不搬**，三列留空。依据见 §9.3 |
-| 6 | **Aramex 取的是响应里的 `total`（含税），而 eParcel / MyPost 走费率卡协议价。若费率卡是不含税价，跨承运商比价系统性偏向 Australia Post 10%。** | ⬜ **未确认**（§0.4 提出）。xpros 用的也是 `total`，所以「与 xpros 一致」这个口径回答不了它——两边会一致地偏。这是目前唯一会让报价算错、但页面上完全看不出来的地方 |
+| 6 | Aramex 取的是响应里的 `total`（含税），而 eParcel / MyPost 走费率卡协议价——两者是否同口径？ | ✅ **同口径，无需改动**（2026-08-22 用户确认）：Australia Post 那份费率卡**含 GST**，Aramex 的 `total` 也是 `price + tax`（实测 64.37 + 6.44 = 70.81，正好 10%）。比价成立。**严禁把 `total` 改成 `price`**——那会让 Aramex 凭空便宜 10% 并赢下本不该赢的订单，且页面上看不出来。已写进 [aramex.adapter.ts](../src/lib/shipping/adapters/aramex.adapter.ts) 的注释 |
 
 ### 9.3 `Mypost_Reg_Xs_Satchel` 的三个尺寸值为什么不搬（2026-08-16 已定）
 

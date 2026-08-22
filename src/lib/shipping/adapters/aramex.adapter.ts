@@ -100,6 +100,12 @@ export async function aramexQuote(
     shippingMethod: option.shippingMethod,
     serviceId: null,
     zone: null,
+    // `total`, not `price`: total is price + GST, and the Australia Post rate
+    // card this is ranked against is GST-inclusive too (confirmed 2026-08-22).
+    // Switching to the ex-GST `price` would make Aramex look 10% cheaper than
+    // every other carrier and win quotes it should not -- a difference nothing
+    // on the page would show.
+    //
     // Aramex answers to six decimal places (70.806197). order_shipping_quotes is
     // numeric(10,2), so the stored figure is rounded either way -- rounding here
     // is what keeps the number the engine ranks and logs identical to the number
