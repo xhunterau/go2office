@@ -168,6 +168,8 @@ Supabase 对 `public` 下每张新表预置 `ALTER DEFAULT PRIVILEGES`，给 `an
 
 ### 未验证的部分
 
+> 2026-08-22：订单 205970 上两次验证跑产生的 22 行 `order_shipping_quotes` 与 2 行 `order_logs` 已清除，两张表现在都是 0 行。`orders` 行自始未被改动。
+
 `npm run build` / `tsc` / `eslint` / `npm test`（105）全绿，服务端四条路径已按 `authenticated` 角色逐条探测。**但浏览器里没点过**：轮询、toast、确认框、以及 CLAUDE.md 规则 12 要求的移动端 + 桌面端各验一次，都还没做。登录态需要真人。
 
 ### 一个不在本次范围内的问题
@@ -932,9 +934,12 @@ fits = (orderL + orderH) <= spec.length_mm && (orderW + orderH) <= spec.width_mm
 
 ## 11. 对既有约定的影响
 
-### 11.1 CLAUDE.md 需要新增一条规则
+### 11.1 ~~CLAUDE.md 需要新增一条规则~~（✅ 2026-08-22 已补）
 
-`zone-resolver` 的邮编解析口径与 `fn_standardize_customer_address()` **必须保持一致**（同样的 `lpad(...,4,'0')` + `upper()` + 等值匹配）。这是与规则 17（`charm_price` 双实现）同构的问题：两边漂移不会报错，只会让「地址标准化得出 state、运费查不到 zone」，而这种不一致极难从现象反推原因。建议在规则 21 下补一条子项，而不是新开一条。
+两条都写进 CLAUDE.md 了：
+
+1. **规则 21 末尾新增一条子项** —— `resolveZone` 的邮编解析口径必须与 `fn_standardize_customer_address()` 逐字一致（`lpad(...,4,'0')` + `upper()` + 等值匹配）。与规则 17（`charm_price` 双实现）同构：两边漂移不报错，只会让同一个客户「地址标准化得出 state、运费查不到 zone」。
+2. **新增规则 22 「Supabase 的 GRANT 是装饰，RLS 才是闸门」** —— 阶段 5 撞出来的，影响本仓库全部迁移，详见 §0.6。
 
 ### 11.2 对迁移脚本（CLAUDE.md 规则 15）的影响
 

@@ -132,3 +132,10 @@
 - **`004` 必须关掉它并在段尾做集合式标准化（两半都不可删）**：这个触发器是**行级**的，灌 178,024 行客户就是真触发 17.8 万次，所以 `004` 第 1 段 `DISABLE` 它、段尾用两条集合式 `UPDATE` 做同样的事、再 `ENABLE`（同一事务内）。只删 `DISABLE` 是慢；**只删那两条 UPDATE 则是静默的**——76,363 个客户带着 `Australia` 入库、与 101,644 行的 `AU` 并存，之后按国家分组会把一个国家算成两个。诊断 11 与 `run-all.mjs` 的 `ADDRESS CHECK` 是唯一的事后检验。
 - **列对列 diff 不能再比 `state` / `country`**：`004` 诊断 7 与 `run-all.mjs` 的 customers 地址检查已改为只比对街道行、`city`、`postcode`。继续比对被标准化的两列，会让一次正确的导入报出五位数 mismatch（与规则 15 的 `001` 商品行、规则 20 的运单号是同一类陷阱）。
 - **校验查幂等，不查「是不是都成 ISO 代码了」**：`country` 列合法地存着非国家名的脏值，用「有多少行不是 ISO 代码」断言为 0 会让检查永远失败。正确写法是只 JOIN 参考表能解析的行，断言它们已在不动点上。
+- **运费分区解析（`resolveZone`）与本函数必须同口径**：`src/lib/shipping/adapters/zone-resolver.ts` 用同一对 `(postcode, city)` 去查 `public.postcodes`，因此它的归一化必须与本函数逐字一致——`lpad(btrim(postcode), 4, '0')`（**Postgres 的 `lpad` 超长会截断，JS 侧的 `normalizePostcode` 已镜像这一点**）、`upper(btrim(city))`、等值而非 `ILIKE`。这是与规则 17（`charm_price` 双实现）同构的问题：两边漂移**不报错**，只会让同一个客户「地址标准化得出 state、运费查不到 zone」，而这种不一致极难从现象反推原因。改任意一侧时必须同步另一侧，并跑 `src/lib/shipping/__tests__/zone-resolver.test.ts`。
+
+# 22. Supabase 的 GRANT 是装饰，RLS 才是闸门
+- **默认全权**：Supabase 对 `public` 下**每张新表**预置 `ALTER DEFAULT PRIVILEGES`，给 `anon` / `authenticated` / `service_role` 全部权限（`pg_default_acl` 里是 `arwdDxtm`）。因此 `supabase/migrations/*` 里那些 `GRANT SELECT ON x TO authenticated` **只是在重述已经成立的事实**，删掉不会改变任何行为，加上也挡不住任何东西。
+- **真正在挡的是 RLS**：开了 row level security 且只有 SELECT 策略的表就是只读的，哪怕 `authenticated` 手握 INSERT / UPDATE / DELETE。运费域那 6 张表正是这个状态——结论没错，但机制不是 `GRANT` 那行。**要让一张表只读，写策略；不要指望不写 GRANT。**
+- **列级 GRANT 是叠加的，单独写没有意义**：`GRANT UPDATE (col)` 挡不住已经存在的表级 UPDATE。要真正把可写列收窄，必须**先 `REVOKE UPDATE ON t FROM authenticated` 再 `GRANT UPDATE (col) ...`**，顺序不可反（REVOKE 表级会连列级条目一起撤掉）。范例见迁移 `20260811110000`。
+- **验证方式**：查 `information_schema` 看不出真实效果（列级与表级条目会同时存在）。唯一可靠的办法是用 `pg` 连 `DATABASE_URL`、`SET ROLE authenticated`，再逐条试 SELECT / UPDATE 各列 / INSERT / DELETE，看哪些真被拒。2026-08-22 就是这样才发现 `20260811100000` 的列级 GRANT 完全无效。
