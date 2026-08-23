@@ -62,3 +62,64 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
 ### 实测
 
 2026-08-22，dev worker `20260822.1`，订单 205970（114g / $10.47 / Cardwell QLD）：1.6 秒完成，11 行报价，选中 `Register_Letter` $5.00。同一订单连跑两次，`order_shipping_quotes` 得到 2 个批次共 22 行，全表仅 1 行 `is_selected` —— 唯一索引未触发冲突。
+
+---
+
+## `submit-aramex-batch`
+
+把当前 `processing` 状态、承运商为 Aramex 的订单逐张提交给 Aramex 建运单，并把运单号写回订单。
+
+| | |
+|---|---|
+| Job ID | `submit-aramex-batch` |
+| 源文件 | [src/trigger/submit-aramex-batch.ts](../src/trigger/submit-aramex-batch.ts) |
+| 核心逻辑 | [src/lib/aramex/consignment.ts](../src/lib/aramex/consignment.ts) 的 `mapOrderToConsignment()` / `submitConsignment()` |
+| `maxDuration` | 300 秒 |
+| `retry` | **`maxAttempts: 1`** —— 见下方「为什么不能重试」 |
+| 触发条件 | `/fulfillment/export-labels` 的 Aramex 卡片（`triggerAramexBatch()` Server Action）。只能手工触发 |
+
+### 入参 / 返回
+
+```ts
+// 入参
+{ userId?: string | null }   // auth.users.id，写进 order_logs.user_id
+
+// 返回
+{
+  successCount: number
+  failures: { invoiceNumber: string; reason: string }[]
+  consignmentIds: number[]
+}
+```
+
+运行中通过 `metadata.set("progress", { current, total })` 上报进度，页面用 `useRealtimeRun` 订阅。
+
+### 它会写哪些表
+
+| 表 | 写入内容 |
+|---|---|
+| `orders.status` | 每张成功的订单改为 `labelled` |
+| `orders.tracking_number` | 写入 Aramex 返回的 `consignmentId`。**xpros 没有这一步**，导致事后无法把订单和运单对上。数值经 `normalize_tracking_number` 触发器原样通过——唯一的数字分支是 MyPost 的，要求同时以 `99` 开头且长度 > 23，而 consignment id 是 bigint（规则 20） |
+| `order_logs` | 每张成功的订单一行，`action` 含 consignment id |
+
+### 为什么不能重试
+
+**建运单不是幂等操作。** 一次部分失败后重跑，已成功的订单因为已经变成 `labelled` 会掉出队列，但**在 Aramex 已接受、而写库失败的那一张会被重复下单**。因此：
+
+- Task 级 `retry: { maxAttempts: 1 }`；
+- `submitConsignment()` 在 Aramex 返回成功之后若写库失败，会抛出**带 consignment id 的错误**，让这张单进 `failures` 而不是静默丢失；
+- 单张失败不中断批次，其余继续。
+
+循环体是**串行**的，不是 `Promise.all`：每次迭代都是一次真实计费的下单，且 Aramex 对该端点限流。
+
+### 前置条件
+
+`shipping_settings.fallback_email` 与 `fallback_phone` 必须非空，否则 Task 直接抛错。Server Action 侧也查一遍，好让这件事显示为页面提示而不是一次失败的 run。
+
+### 环境变量
+
+与 `quote-shipping` 完全相同的 6 个（service role + 4 个 `ARAMEX_*`）。同样的警告：**部署环境读不到 `.env.local`**，必须在 Trigger.dev 控制台另配一份。
+
+### 实测
+
+⚠️ **截至 2026-08-23 尚未用真实订单跑过。** 建运单会产生真实费用，需要在有真实待发订单时人工点一次验证。当前 `processing` 队列里只有 1 张 `Aramex_Satchel`。

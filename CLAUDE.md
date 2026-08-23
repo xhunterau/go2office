@@ -148,3 +148,14 @@
 - **`flat_rate_package_specs.maps_to_weight_kg` 必须精确等于某个 `carrier_services.max_weight`**：定额适配器就是用它去 `.eq("max_weight", spec.maps_to_weight_kg)` 定档的。对不上时只在报价行里写一句 `No standard tier at 5kg`，页面别处毫无提示——所以袋箱规格页会主动标出这类行。改任一侧的数值时必须核对另一侧。
 - **`carrier_zone_rates` 的空行与 `$0` 不是一回事**：没有行 = 该档不服务这个分区、引擎跳过；`rate = 0` = 零元报价，**稳赢所有比价**。`carrier_zone_rates_has_pricing` 这个 CHECK 就是为拦住「两种计价方式都没填、于是按 0 出价」而存在的，zod 两侧都镜像了它。
 - **改这些表不回溯**：`order_shipping_quotes` 存的是当天报出的价，不会因费率变动而重算——这是刻意的（报价是「当时收了多少」的记录）。页面上写明了这一点。
+
+# 24. 出货标签与承运商导出（/fulfillment/export-labels）
+- **范围**：三条产标签的路径由 `src/lib/fulfillment/*` + `src/lib/print/*` + `src/lib/aramex/consignment.ts` 支撑——自印 A6 PDF、MyPost 23 列 CSV、eParcel 25 列 CSV，外加 Aramex 的 API 下单（`submit-aramex-batch` Task）。队列一律是 `orders.status = 'processing'`，出完标签进 `labelled`。详见 `docs/fulfillment-labels.md`。
+- **地址行必须过 `usableAddressLines()`，严禁直接拼 `address_line1..4`**：`customers.address_line3` 非空的 114,193 行里有 114,161 行是 `ebay:xxxx` 引用码而不是地址（99.97%）。xpros 的三条路径都无条件拼接，照搬就是**把 eBay 引用码印到快递面单上**，而且不报任何错。该函数按内容判断（`isReferenceCode`）而非整列丢弃，所以那 32 行真实的第三行地址仍然有效。新增任何一条产标签的路径时照此办理。
+- **承运商映射表缺键必须抛 `UnmappableOrderError`，严禁 `?? 默认值`**：`mapPackagingType`（MyPost 包装代码）与 `mapChargeCode`（eParcel 计费代码）都是按 `shipping_method` 取值的表。xpros 分别兜底成 `OWN_PACKAGING` 与 `3D55`——前者把澳邮自有箱按自备包装下单并据此计价，后者把快递件按普邮 code 计费，**承运商照样受理，没有任何东西会暴露它**。`Mypost_*_Xs_Box`（代码未确认）与 `Eparcel_Intl_Express`（charge code 未知）就是靠这条留空而安全的。
+- **`carrier-groups.ts` 底部的穷尽性检查不可删**：`type Unrouted = Exclude<ShippingMethod, RoutedMethod>` 那一行保证每个 `shipping_method` 要么归入某个通道，要么进 `UNROUTED_METHODS` 并写明理由。xpros 把这些清单分散在各 action 里、彼此无关系，于是一个没被任何清单收录的 method 只是从页面上消失。加枚举值时会在这里编译失败并把值名打进错误信息——这是设计。
+- **导出的副作用顺序：先构建文件、再改状态、最后写日志**。构建失败必须零副作用（映射失败在此中断）。改状态必须 `.select("id")` 读回**并比对行数**（规则 22：RLS 拒绝 UPDATE 是返回 0 行不是报错）。写日志失败**不**整体失败，改为附带 warning——此时状态已经改了，报「导出失败」是更糟的答案。
+- **`shipping_settings.fallback_email` / `fallback_phone` 为空时导出必须停下**：这两个值会被印在**别人的**包裹上。默认是空字符串而不是某个真实地址，`requireFallbacks()` 在空值时返回指向 `/settings/shipping/constants` 的错误。严禁照抄 xpros 的 `admin@xhunter.com.au` / `+61431950696`——那是 xhunter 的联系方式。
+- **Aramex 下单不是幂等操作**：`submit-aramex-batch` 的 `retry.maxAttempts` 必须是 1，循环必须**串行**（不是 `Promise.all`）。一次部分失败后重跑，已成功的订单因已变成 `labelled` 会掉出队列，但**在 Aramex 已接受、写库却失败的那一张会被重复下单**。所以 `submitConsignment()` 在写库失败时抛出的错误里必须带上 consignment id。返回的 `consignmentId` 要写回 `orders.tracking_number`（xpros 漏了这步，事后无法把订单和运单对上）——它经 `normalize_tracking_number` 安全，唯一的数字分支要求同时以 `99` 开头且长度 > 23（规则 20）。
+- **`/api/print/shipping-label` 必须走请求自己的 Supabase 客户端**：xpros 的同名路由用 service role 直连且无鉴权，任何人猜到订单 id 就能读到客户地址。本项目要求会话且保留 RLS，另有单次 250 张上限。
+- **下单用 `dominant_*`，报价用 `packed_*`**：报价适配器有意用悲观的装箱估算让价格偏高；下单该申报实际装进箱子的东西。两者不可互换。

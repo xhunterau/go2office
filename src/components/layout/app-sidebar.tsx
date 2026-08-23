@@ -6,6 +6,7 @@ import {
   ChevronRight,
   LayoutDashboard,
   Package,
+  Printer,
   ShoppingCart,
   Users,
   Settings,
@@ -60,6 +61,9 @@ const navItems = [
   { title: "Dashboard", href: "/", icon: LayoutDashboard },
   { title: "Orders", href: "/orders", icon: ShoppingCart },
   { title: "Customers", href: "/customers", icon: Users },
+  // Flat rather than a collapsible group: dispatch is one screen today. It sits
+  // after Orders because that is the order the work happens in.
+  { title: "Export Labels", href: "/fulfillment/export-labels", icon: Printer },
 ]
 
 export function AppSidebar() {

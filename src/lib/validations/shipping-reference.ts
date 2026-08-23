@@ -206,6 +206,16 @@ const positive = (label: string) =>
     .finite(`${label} must be a number`)
     .positive(`${label} must be greater than 0`)
 
+const requiredText = (label: string, max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .max(max, `${label} is too long`)
+
+const optionalText = (max: number) =>
+  z.string().trim().max(max, "This value is too long")
+
 export const shippingSettingsSchema = z.object({
   au_post_max_length_mm: positive("Max length"),
   au_post_max_weight_kg: positive("Max weight"),
@@ -229,6 +239,33 @@ export const shippingSettingsSchema = z.object({
     .number({ message: "Tiebreak threshold is required" })
     .min(0, "Tiebreak threshold cannot be negative")
     .lt(1, "Tiebreak threshold is a fraction, e.g. 0.05 for 5%"),
+
+  // The sender block, mirroring shipping_settings_sender_present. Only line 2
+  // is optional -- everything else is what makes an undeliverable parcel
+  // returnable.
+  sender_name: requiredText("Sender name", 100),
+  sender_address_line1: requiredText("Sender address line 1", 80),
+  sender_address_line2: optionalText(80),
+  sender_suburb: requiredText("Sender suburb", 60),
+  // Not constrained to the eight Australian codes: the value is printed, not
+  // matched, and the reference tables that do resolve states live elsewhere.
+  sender_state: requiredText("Sender state", 10),
+  sender_postcode: z
+    .string()
+    .trim()
+    .regex(/^\d{4}$/, "An Australian postcode is four digits"),
+
+  // Blank is allowed and means "not configured". The export actions treat that
+  // as a stop condition rather than substituting anything, so an unset fallback
+  // can never reach a customer's parcel.
+  fallback_email: z
+    .string()
+    .trim()
+    .max(255, "Fallback email is too long")
+    .refine((value) => value === "" || z.email().safeParse(value).success, {
+      message: "Enter a valid email address, or leave it blank",
+    }),
+  fallback_phone: optionalText(32),
 })
 
 export type ShippingSettingsInput = z.infer<typeof shippingSettingsSchema>

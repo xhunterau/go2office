@@ -728,6 +728,23 @@ export type Database = {
           // How much cheaper a quote must be to beat the carrier-priority order
           // outright. xpros hard-codes this as 0.05.
           quote_tiebreak_threshold: number
+          // The sender block Australia Post labels carry: the MyPost CSV's seven
+          // Send From columns and the self-printed A6 label's FROM block.
+          // eParcel's template has no sender columns (the charge code identifies
+          // the account) and Aramex takes its pickup address from the account
+          // too, so neither reads these. A CHECK keeps all but line2 non-blank.
+          sender_name: string
+          sender_address_line1: string
+          sender_address_line2: string
+          sender_suburb: string
+          sender_state: string
+          sender_postcode: string
+          // Stand-ins for a customer with no email or no usable phone. Blank is
+          // a real state meaning "not set yet": the export actions stop and say
+          // so rather than putting our own contact details on a customer's
+          // parcel.
+          fallback_email: string
+          fallback_phone: string
           updated_at: string
         }
         Insert: {
@@ -738,6 +755,14 @@ export type Database = {
           eparcel_oversize_threshold_mm?: number
           eparcel_fuel_charge_rate?: number
           quote_tiebreak_threshold?: number
+          sender_name?: string
+          sender_address_line1?: string
+          sender_address_line2?: string
+          sender_suburb?: string
+          sender_state?: string
+          sender_postcode?: string
+          fallback_email?: string
+          fallback_phone?: string
           updated_at?: string
         }
         Update: {
@@ -748,6 +773,14 @@ export type Database = {
           eparcel_oversize_threshold_mm?: number
           eparcel_fuel_charge_rate?: number
           quote_tiebreak_threshold?: number
+          sender_name?: string
+          sender_address_line1?: string
+          sender_address_line2?: string
+          sender_suburb?: string
+          sender_state?: string
+          sender_postcode?: string
+          fallback_email?: string
+          fallback_phone?: string
           updated_at?: string
         }
         Relationships: []
