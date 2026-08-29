@@ -32,9 +32,31 @@ export interface AramexConsignmentRequest {
   ExternalRef2?: string
 }
 
+/** One booked item inside a consignment. A consignment we book always has one. */
+export interface AramexConsignmentItemResult {
+  conItemId?: number
+  /**
+   * The trackable article number printed on the label, e.g. "MS0020719756".
+   * This is what a customer can look up -- conId cannot.
+   */
+  label?: string | null
+}
+
 export interface AramexConsignmentResponse {
   data: {
-    consignmentId: number
+    /**
+     * Aramex's internal consignment id, e.g. 171295222. Verified against a live
+     * GET /api/consignments/{conId} on 2026-08-23.
+     */
+    conId?: number
+    /**
+     * What xpros reads (`response.data.consignmentId`). The live API does not
+     * send this key, so xpros' expression evaluates to undefined -- which never
+     * showed there because xpros throws the id away instead of storing it. Kept
+     * as a fallback in case the field ever appears; see docs/fulfillment-labels.md.
+     */
+    consignmentId?: number
+    items?: AramexConsignmentItemResult[]
   }
 }
 

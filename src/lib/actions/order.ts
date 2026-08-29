@@ -1,6 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
+import { z } from "zod"
 
 import {
   isCheckViolation,
@@ -12,6 +13,11 @@ import {
   fetchOrderTransactionsWithItems,
   type OrderTransaction,
 } from "@/lib/queries/orders"
+import { escapeLike } from "@/lib/queries/search-params"
+import {
+  SHIPPING_METHOD_OPTIONS,
+  type ShippingMethod,
+} from "@/lib/orders/shipping-method"
 import { createClient } from "@/lib/supabase/server"
 import {
   orderUpdateSchema,
@@ -43,6 +49,10 @@ function messageFor(error: { code?: string; message?: string }): string {
   }
   return error.message ?? "Something went wrong"
 }
+
+// The same source the dropdowns iterate, so a value the DB enum does not have
+// cannot reach the cast. Nullable because 375 orders have no carrier at all.
+const shippingMethodSchema = z.enum(SHIPPING_METHOD_OPTIONS).nullable()
 
 // The transaction lines behind one order, for the list page's row expansion.
 //
@@ -125,6 +135,65 @@ export async function updateOrder(
 
   revalidateOrder(id)
   return { success: true }
+}
+
+// Set the carrier from the Shipping card, without opening the edit dialog.
+//
+// Split out of updateOrder rather than folded into it because it has a side
+// effect that form does not: it clears the selected shipping quote. Choosing a
+// quote is what writes shipping_method in the first place
+// (selectShippingQuote), so overriding the method by hand leaves the panel
+// claiming a selection the order no longer follows. The quote ROWS stay --
+// order_shipping_quotes records what was quoted on the day and is deliberately
+// not rewritten when circumstances change (rule 23) -- only the flag goes.
+export async function updateOrderShippingMethod(
+  orderId: number,
+  method: ShippingMethod | null
+): Promise<ActionResult<{ warning?: string }>> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+
+  const parsed = shippingMethodSchema.safeParse(method)
+  if (!parsed.success) {
+    return { success: false, error: "Unknown shipping method" }
+  }
+
+  const supabase = await createClient()
+
+  // .select().maybeSingle() is not decoration: RLS refuses an UPDATE by
+  // filtering the rows away rather than raising, so without reading the row
+  // back a blocked write would toast success (rule 22).
+  const { data: updated, error } = await supabase
+    .from("orders")
+    .update({ shipping_method: parsed.data })
+    .eq("id", orderId)
+    .select("id")
+    .maybeSingle()
+
+  if (error) return { success: false, error: messageFor(error) }
+  if (!updated) return { success: false, error: "Order not found" }
+
+  const { error: quoteError } = await supabase
+    .from("order_shipping_quotes")
+    .update({ is_selected: false })
+    .eq("order_id", orderId)
+    .eq("is_selected", true)
+
+  revalidateOrder(orderId)
+
+  // A stale flag is worth a warning, not a failure: the carrier on the order --
+  // the thing the label and the CSV export read -- has already changed.
+  if (quoteError) {
+    return {
+      success: true,
+      data: {
+        warning: `The carrier was changed, but the previously selected quote is still marked selected: ${quoteError.message}`,
+      },
+    }
+  }
+
+  return { success: true, data: {} }
 }
 
 // Move an order onto a different customer.
@@ -379,27 +448,139 @@ export async function deleteOrderTransaction(
   return { success: true }
 }
 
-// Recalculate every picked line on an order against today's kit contents.
+// There is deliberately no wrapper here for rebuild_order_items_for_order.
 //
-// Destructive and irreversible: it replaces what was actually shipped with what
-// the current BOM says would ship now, and there is no undo. The confirmation
-// copy has to say that outright. It is still the only supported way to pull an
-// order up to the current BOM -- product_kit_items changes deliberately do not
-// cascade into order_items.
-export async function rebuildOrderItems(orderId: number): Promise<
-  ActionResult<{ rowsWritten: number }>
-> {
+// The detail page used to offer it as "Rebuild picked items". It was removed on
+// 2026-08-23 (user decision): it replaces what was actually shipped with today's
+// kit contents, has no undo, and was never wanted in practice. The RPC itself
+// still exists -- the insert/update triggers on order_transactions call the
+// per-transaction form of it on every line change, which is where picked items
+// legitimately come from. What is gone is the button that pointed it at a whole
+// historical order.
+
+/**
+ * Creates an after-sales order for the same customer, numbered against the
+ * original.
+ *
+ * The `base@N` convention is not new: 292 of the migrated orders already carry
+ * it (290 `@1`, two `@2`), all of them `platform = store`, so this reproduces
+ * what the Laravel system did rather than inventing a scheme. `base` is
+ * everything before the first `@`, which makes a follow-up of a follow-up
+ * number `base@3` rather than `base@1@1`.
+ *
+ * The new order is empty on purpose -- lines are added by hand afterwards. It is
+ * a replacement, a warranty send-out or a missing part, and copying the original
+ * transactions would create picked items (and therefore an expectation of
+ * stock movement) that nobody asked for.
+ */
+export async function createFollowUpOrder(
+  orderId: number
+): Promise<ActionResult<{ orderId: number; invoiceNumber: string }>> {
   if (!Number.isInteger(orderId) || orderId <= 0) {
     return { success: false, error: "Invalid order" }
   }
 
   const supabase = await createClient()
-  const { data, error } = await supabase.rpc("rebuild_order_items_for_order", {
-    p_order_id: orderId,
-  })
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Your session has expired" }
 
-  if (error) return { success: false, error: error.message }
+  const { data: source, error: sourceError } = await supabase
+    .from("orders")
+    .select("customer_id, invoice_number")
+    .eq("id", orderId)
+    .maybeSingle()
+
+  if (sourceError) return { success: false, error: sourceError.message }
+  if (!source) return { success: false, error: "Order not found" }
+
+  const base = source.invoice_number.split("@")[0]
+
+  // escapeLike because `base` is user-visible data: a `%` or `_` in an invoice
+  // number would turn the prefix into a wildcard and pull in siblings of other
+  // orders. No invoice contains either today, which is exactly the kind of fact
+  // that stops being true quietly.
+  const { data: siblings, error: siblingError } = await supabase
+    .from("orders")
+    .select("invoice_number")
+    .like("invoice_number", `${escapeLike(base)}@%`)
+
+  if (siblingError) return { success: false, error: siblingError.message }
+
+  let maxSuffix = 0
+  for (const row of siblings ?? []) {
+    // Everything after the FIRST @, so `1@2` is rejected rather than read as 2.
+    const suffix = row.invoice_number.slice(base.length + 1)
+    if (!/^\d+$/.test(suffix)) continue
+    maxSuffix = Math.max(maxSuffix, Number(suffix))
+  }
+
+  // Read-then-insert is not atomic, and orders_invoice_number_unique is what
+  // actually decides. Two operators on the same order a second apart both
+  // compute @3; the loser retries with the next suffix instead of showing a
+  // constraint name. One retry only -- a third collision is not contention any
+  // more, it is a bug worth surfacing.
+  let invoiceNumber = ""
+  let created: { id: number } | null = null
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    invoiceNumber = `${base}@${maxSuffix + 1 + attempt}`
+
+    const { data, error: insertError } = await supabase
+      .from("orders")
+      .insert({
+        customer_id: source.customer_id,
+        invoice_number: invoiceNumber,
+        // Not `backorder`: this is a new sale to the same customer, not a line
+        // waiting on stock. `store` is what all 292 historical follow-ups carry.
+        status: "pending",
+        platform: "store",
+      })
+      .select("id")
+      .maybeSingle()
+
+    if (data) {
+      created = data
+      break
+    }
+    if (insertError && !isUniqueViolation(insertError)) {
+      return { success: false, error: messageFor(insertError) }
+    }
+    if (attempt === 1) {
+      return {
+        success: false,
+        error: `Invoice number ${invoiceNumber} was taken while this was being created. Try again.`,
+      }
+    }
+  }
+
+  if (!created) {
+    return { success: false, error: "The follow-up order could not be created" }
+  }
+
+  // Both directions, so either order's history leads to the other. A failed log
+  // is reported and does not undo the order -- the order exists by then, and
+  // telling the user it failed would send them to create a second one.
+  const { error: logError } = await supabase.from("order_logs").insert([
+    {
+      order_id: orderId,
+      action: `Created follow-up order ${invoiceNumber}`,
+      user_id: user.id,
+    },
+    {
+      order_id: created.id,
+      action: `Created as a follow-up from order ${source.invoice_number}`,
+      user_id: user.id,
+    },
+  ])
+
+  if (logError) {
+    console.error("Failed to write the follow-up order log:", logError)
+  }
 
   revalidateOrder(orderId)
-  return { success: true, data: { rowsWritten: data ?? 0 } }
+  revalidateOrder(created.id)
+
+  return { success: true, data: { orderId: created.id, invoiceNumber } }
 }

@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | 源实现 | xpros 的 `src/app/fulfillment/export-labels/*`、`src/lib/{mypost,eparcel,direct-freight}-csv.ts`、`src/lib/aramex-*.ts`、`src/app/api/print/shipping-label/route.ts` |
-| 落地对象 | 1 个迁移 + `src/lib/fulfillment/*` + `src/lib/print/*` + `src/lib/aramex/consignment.ts` + 1 个 Trigger Task + `/fulfillment/export-labels` + `/api/print/shipping-label` |
+| 落地对象 | 1 个迁移 + `src/lib/fulfillment/*` + `src/lib/print/*` + `src/lib/aramex/consignment.ts` + 1 个 Trigger Task + `/fulfillment/export-labels` + `/api/print/shipping-label`（+ 2026-08-23 追加 `/api/print/invoice`） |
 | 迁移文件 | `20260823100000_add_dispatch_sender_settings.sql`（**已推送远端**） |
 | 状态 | **代码完成 2026-08-23，`npm test` 261 passed / `tsc` / `eslint` / `next build` 均通过；浏览器交互与 Aramex 真实下单未验证**（见 §6） |
 
@@ -36,7 +36,7 @@
 | eParcel | `EPARCEL_METHODS`（2 个） | 25 列 CSV + 一行 MANDATORY 注释行 | `exportEParcelCsv()` |
 | Aramex | `ARAMEX_METHODS`（2 个） | API 下单，无文件 | `triggerAramexBatch()` → `submit-aramex-batch` Task |
 
-三个 `shipping_method` 不属于任何通道，理由写在 [carrier-groups.ts](../src/lib/fulfillment/carrier-groups.ts) 的 `UNROUTED_METHODS`：`Eparcel_Intl_Express`（缺 charge code，0 单）、`Direct_Freight`（决策 5）、`Click_and_Collect`（决策 6）。
+两个 `shipping_method` 不属于任何通道，理由写在 [carrier-groups.ts](../src/lib/fulfillment/carrier-groups.ts) 的 `UNROUTED_METHODS`：`Direct_Freight`（决策 5）、`Click_and_Collect`（决策 6）。
 
 **该文件底部有一处编译期穷尽性检查**：往 `shipping_method` 枚举加值而不决定它归哪个通道，`Unrouted` 会变成一个真实联合类型，那一行随即无法编译并把该值名字打进错误信息。xpros 把这些清单分散在各个 action 里、彼此没有关系，所以一个没被任何清单收录的 method 只是从页面上消失，**没有任何提示**。
 
@@ -65,7 +65,11 @@ xpros 有两个互不兼容的版本：MyPost 版溢出时把原 line2/line3 挤
 | `mapPackagingType` | `?? 'OWN_PACKAGING'` | 抛 `UnmappableOrderError`，消息带 invoice |
 | `mapChargeCode` | `?? '3D55'` | 同上 |
 
-go2office 的枚举多出 `Mypost_Reg_Xs_Box` / `Mypost_Exp_Xs_Box`，xpros 的 `PACKAGING_MAP` 没有这两个键——兜底会把 XS 箱按自备包装下单并据此计价。两者全库 0 单，所以映射表里**故意留空**，第一张出现时导出会指名报错。charge code 同理：兜底会把快递件按普邮 code 计费，而承运商照样受理，**没有任何东西会暴露它**。
+兜底会把澳邮自有箱按自备包装下单并据此计价；charge code 同理，会把快递件按普邮 code 计费——**承运商照样受理，没有任何东西会暴露它**。
+
+两张表现在都是满的（`PACKAGING_CODES` 覆盖 `MYPOST_METHODS` 全部 20 项，`CHARGE_CODES` 覆盖 `EPARCEL_METHODS` 全部 2 项），所以键类型收窄到了各自的通道清单——**新增一个 MyPost / eParcel 方法却没配代码是编译错误**，与 `carrier-groups.ts` 底部的穷尽性检查同一路数。运行时的抛错保留，管的是通道之外的方法。
+
+> 曾经留空的两组键（`Mypost_*_Xs_Box` 的包装代码、`Eparcel_Intl_Express` 的 charge code）已随迁移 `20260823110000` 从枚举里删除：澳邮根本没有 XS 纸箱，go2office 也没有国际 eParcel 合约。
 
 ### 3.4 `formatPhone` 认国家
 
@@ -79,11 +83,36 @@ xpros 硬编码 `admin@xhunter.com.au` / `+61431950696`。本版是 `shipping_se
 
 已于 2026-08-23 配置为 `admin@go2buy.com.au` / `0450952227`。兜底号码**和其他号码走同一条归一化**（`normaliseFallbackPhone`），所以设置页填本地格式也会以 `+61450952227` 进 CSV——否则那一行会是几百个 `+61...` 里唯一的本地格式。无法识别为电话号码的值原样透传，好让它在导出里被看见而不是被吞掉。
 
-### 3.6 Aramex 的 `consignmentId` 写回订单
+### 3.6 Aramex 的运单号写回订单
 
 xpros 拿到后只改状态、写日志，**不落库**，事后无法把订单和运单对上。本版写进 `orders.tracking_number`。
 
-经 `normalize_tracking_number` 触发器安全（规则 20）：唯一的纯数字分支是 MyPost 的，要求同时以 `99` 开头**且**长度 > 23，而 consignment id 是 bigint 级数字。
+**2026-08-23 修正——字段名是 `conId`，不是 `consignmentId`。** 首次真实下单（staging run `run_06g2po1ihq6ev6hld2l8rhdv01`）返回 `consignmentIds: [null]`，订单 205971 的 `tracking_number` 被写成字符串 `"undefined"`。原因是本项目照抄了 xpros 的 `response.data.consignmentId`，而线上 API **不发这个键**——xpros 拿到 id 后直接丢掉，所以它那边永远不会暴露。
+
+对着线上 `GET /api/consignments/{conId}` 核实的真实结构：
+
+| 字段 | 例值 | 用途 |
+|---|---|---|
+| `data.conId` | `171295222` | Aramex 内部运单 id，**客户拿它查不到件** |
+| `data.items[].label` | `MS0020719756` | 面单上的可追踪号，**这才是 tracking number** |
+
+[`readConsignmentIds()`](../src/lib/aramex/consignment.ts) 因此按 `items[0].label` → `conId` → xpros 的 `consignmentId` 三级取值。**取不到时返回 null 而不是占位值**——`String(undefined)` 正是那行脏数据的来源，`tracking_number` 宁可留空。这类订单进 task 结果的 `untracked`，页面单独 toast 提示去 Aramex 后台补录，**不算失败**（包裹已经交运，报失败会诱发重复下单）。
+
+经 `normalize_tracking_number` 触发器安全（规则 20）：`MS…` 开头匹配不到任何前缀规则，纯数字的 `conId` 也不进 MyPost 分支（那要求同时以 `99` 开头**且**长度 > 23）。
+
+> 205971 的运单号已在 2026-08-23 清成 NULL 并在 `order_logs` 留了说明。列表接口 `GET /api/consignments` 翻不到这张（最新一页停在 08-21），只能到 Aramex 后台按收件人 Tony Clark / Grovedale VIC 3216 找回。
+
+### 3.6b 批次状态靠轮询，不靠 realtime 订阅
+
+Aramex 批次是唯一的异步通道，页面要知道它什么时候结束。初版用 `useRealtimeRun` 订阅 + `auth.createPublicToken`，**2026-08-23 实测失效**：run 在 staging 正常 COMPLETED（4.5 秒执行，前面 21 秒冷启动），浏览器却没收到终态，spinner 一直转，而四张卡片都因 `busy != null` 被禁用——除了刷新页面没有出路。
+
+改成页面每 2 秒调一次 [`getAramexBatchStatus()`](../src/lib/actions/fulfillment.ts)（`runs.retrieve`）。理由：**自己发的请求要么有答案要么明确失败；而一条哑掉的订阅和「还在跑」长得一模一样**。订单详情页的报价面板本来就是这么轮询的。三层保护：
+
+1. **终态判定改为「不在进行中集合里就是结束」**。原来的写法是「等于 COMPLETED，或落在一个手写的失败集合里」，而那个集合漏了 `EXPIRED`、还带着 v4 根本不存在的 `INTERRUPTED`。现在 `LIVE_STATUSES` 只列 6 个进行中状态，其余一律释放页面；`UnclassifiedStatus` 那行编译期检查保证 SDK 新增状态时必须表态（与 `carrier-groups.ts` 底部同一路数）。
+2. **8 分钟硬超时**（task 的 `maxDuration` 是 300 秒，冷启动实测 21 秒），超时后释放页面并提示刷新。
+3. **`Stop waiting` 按钮**，任何时候能手动脱困。
+
+三层都不依赖对方成立。公开 token 随之取消——状态不再经浏览器直连 Trigger.dev。
 
 ### 3.7 导出的顺序：先出文件，再改状态
 
@@ -97,6 +126,8 @@ xpros 先 `update` 状态再返回 CSV，且把写日志失败当作整体错误
 ### 3.8 打印路由要求登录
 
 xpros 的 `/api/print/shipping-label` 用 service role 直连、**没有任何鉴权**，任何人猜到订单 id 就能读到客户地址。本版用请求自己的 Supabase 客户端，会话必需且 RLS 仍然生效，另加 250 张的单次上限。
+
+**`/api/print/invoice`（2026-08-23 新增）与它同构**，同样的鉴权、同样的 250 张上限、同样的 `parseOrderIds` + `bwip-js` 条码 + `@react-pdf/renderer`。入口在订单详情页的 `⋯` 菜单，批量入口暂时没有。抬头的法人名 / ABN / 银行信息写死在 `src/lib/print/company.ts`，通信地址仍读 `shipping_settings.sender_*`——同一个地址已经印在包裹上，抄第二份就要同步两处。设计细节（含"GST 是总额的十一分之一"和"只标未付不标已付"两个反直觉点）见 `docs/orders-ui.md` §6.8.3。**不做 packing slip**（用户决定）。
 
 ### 3.9 面单的邮资标记按 method 区分
 
@@ -127,9 +158,7 @@ MyPost 的尺寸只有 `Mypost_Regular` / `Mypost_Express`（自备包装）用�
 
 | 项 | 说明 |
 |---|---|
-| **浏览器交互** | `/fulfillment/export-labels` 四张卡片、CSV 下载、PDF 打印视图、Aramex 进度条均**未人工点过** |
+| **浏览器交互** | CSV 下载、PDF 打印视图、四张卡片的进度条仍需人工点一遍（移动端 + 桌面端，规则 12）。Aramex 卡片已于 2026-08-23 真实跑过一次 |
 | **Aramex 真实下单** | 会产生真实费用，需在有真实待发订单时验证。当前队列里 1 张 `Aramex_Satchel` |
-| **Trigger.dev 部署环境变量** | 6 个变量仍未在控制台配置，`submit-aramex-batch` 目前只在 dev worker 可用（与 `quote-shipping` 同一问题） |
-| **XS 箱的 packaging code** | `Mypost_*_Xs_Box` 的澳邮代码未确认，映射表留空，出现时报错 |
-| **国际件 charge code** | `Eparcel_Intl_Express` 未进 eParcel 组，出现时报错 |
+| ~~**Trigger.dev 部署环境变量**~~ | **2026-08-29 更正：已配置。** 08-23 那次真实下单就是跑在 staging 部署版 `v20260823.1` 上的——缺任何一个变量它都会立刻抛错 |
 | **自印面单是否还要加别的 method** | 用户在选择时另选了「Other」但未填写内容，当前按上述 5 个实现 |

@@ -4,7 +4,20 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Sweeps a stripe across a Progress track whose value is null -- the CSV and
+   label exports are a single server round trip with no percentage to report,
+   so the bar says "working", not "37% done". */
+@keyframes progress-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
 @theme inline {
+  --animate-progress-sweep: progress-sweep 1.4s ease-in-out infinite;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);

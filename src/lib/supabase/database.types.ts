@@ -1042,6 +1042,12 @@ export type Database = {
           web_order_id: string | null
           comments: string | null
           posted_on_date: string | null
+          // Order Allocation stage marker (migration 20260824100000). On a
+          // `pending` order, NULL means it is still in the Address queue and a
+          // value means it has moved to the Postage queue. Nothing else reads
+          // it: an order that has left `pending` keeps whatever it had.
+          address_verified_at: string | null
+          address_verified_by: string | null
           created_at: string
           updated_at: string
         }
@@ -1060,6 +1066,8 @@ export type Database = {
           web_order_id?: string | null
           comments?: string | null
           posted_on_date?: string | null
+          address_verified_at?: string | null
+          address_verified_by?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -1078,6 +1086,8 @@ export type Database = {
           web_order_id?: string | null
           comments?: string | null
           posted_on_date?: string | null
+          address_verified_at?: string | null
+          address_verified_by?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -1601,6 +1611,15 @@ export type Database = {
         Args: { p_order_id: number }
         Returns: number
       }
+      // Order Allocation's batch address check. Marks every pending AU order
+      // whose (postcode, suburb) resolves in public.postcodes as
+      // address-verified and logs each one, in a single statement. Returns how
+      // many orders moved. SECURITY INVOKER, so RLS applies and auth.uid()
+      // names the actor.
+      verify_pending_order_addresses: {
+        Args: Record<string, never>
+        Returns: number
+      }
       // Two more functions exist in the schema and are deliberately absent here,
       // because both are revoked from PUBLIC and cannot be called through
       // PostgREST (migrations 20260808170000 and 20260808190000):
@@ -1648,15 +1667,12 @@ export type Database = {
         | "Express_Post"
         | "Eparcel_Regular"
         | "Eparcel_Express"
-        | "Eparcel_Intl_Express"
         | "Mypost_Regular"
         | "Mypost_Express"
-        | "Mypost_Reg_Xs_Box"
         | "Mypost_Reg_S_Box"
         | "Mypost_Reg_M_Box"
         | "Mypost_Reg_L_Box"
         | "Mypost_Reg_XL_Box"
-        | "Mypost_Exp_Xs_Box"
         | "Mypost_Exp_S_Box"
         | "Mypost_Exp_M_Box"
         | "Mypost_Exp_L_Box"

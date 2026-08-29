@@ -49,3 +49,11 @@ next-env.d.ts
 
 # trigger.dev
 .trigger
+
+# The dispatch simulation's snapshot of real order statuses. Deliberately NOT
+# committed: it names 30 specific production order ids and the values they held
+# at one moment. Checked out later onto a tree where those orders have legitimately
+# moved on, `--revert` would write those stale statuses straight back over them.
+# It is local operational state, and it is the ONLY record that makes the
+# simulation reversible -- do not delete it before running --revert.
+scripts/simulation/snapshot.json

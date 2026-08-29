@@ -357,19 +357,25 @@ Transactions (2)
 
 ```
 ┌ Header ─────────────────────────────────────────────┐
-│ Invoice 180048CF        [completed] [ebay]          │
+│ Invoice 180048CF ⧉      [completed] [ebay]          │
 │ Created 12 Mar 2026 · Dispatched 14 Mar 2026        │
 │                                    [Edit] [⋯]      │
-├ 三栏摘要 ───────────────────────────────────────────┤
-│ Customer          │ Shipping         │ Totals       │
-│ 姓名/邮箱/电话     │ 方式/追踪号      │ Goods        │
-│ 收件地址 ⚠         │ Web order id     │ Postage      │
-│ → 客户详情         │                  │ Order total  │
+├ 四栏摘要 ───────────────────────────────────────────┤
+│ Customer      │ Shipping      │ Totals    │ Parcel  │
+│ 姓名/邮箱/电话 │ 方式（下拉）  │ Goods     │ Items   │
+│ 收件地址 ⚠     │ 追踪号 ⧉      │ Postage   │ Weight  │
+│ → 客户详情     │ Web order id  │ Order tot │ 尺寸    │
 ├ Transactions ───────────────────────────────────────┤
-│ 交易行表格 + 行内展开拣货明细（§6.1）                 │
+│ 缩略图 + 交易行表格 + 行内展开拣货明细（§6.1）        │
+├ Shipping Quotes ────────────────────────────────────┤
+│ 报价批次（docs/shipping-quote-engine.md）            │
 ├ Comments ───────────────────────────────────────────┤
 └─────────────────────────────────────────────────────┘
 ```
+
+**顺序：Transactions 在 Shipping Quotes 之上**（用户决定，2026-08-23）。看一张订单先看卖了什么，报价是随后才关心的事；把报价面板挡在中间等于每次都要越过它。
+
+`⧉` 是行内复制按钮，见 §6.8。
 
 ### 6.3 收件地址那个 ⚠ 是必需的
 
@@ -389,7 +395,9 @@ trigger 的 `WHEN` 子句已经把"提交全部字段的表单"这条常见坑�
 1. 把 `custom_label` / `quantity` 的编辑与其他字段的编辑**分开**，不放在同一个"保存全部"按钮下；
 2. 修改这两个字段前用全局 `useConfirm`（规则 9）提示会重建拣货明细并可能丢失手工调整。
 
-同理，详情页 `⋯` 菜单里的 `Rebuild picked items`（调 `rebuild_order_items_for_order(order_id)`）是**唯一支持的"把历史订单按当前 BOM 重算"的手段**，也是破坏性的——它会把当年实际发出去的明细替换成今天的 BOM。文案要写死："This replaces what was actually shipped with today's kit contents."
+~~同理，详情页 `⋯` 菜单里的 `Rebuild picked items`……~~ **该菜单项已于 2026-08-23 删除（用户决定）**，`rebuildOrderItems` action 一并删掉。它调的 `rebuild_order_items_for_order(order_id)` 是破坏性的（把当年实际发出去的明细替换成今天的 BOM，无回滚），实际从未被用到，留着只是给一个不可逆操作一个随手可点的入口。
+
+**RPC 本身还在，而且必须在**：`order_transactions` 上的 insert / update 触发器调的是它的**单交易行**形式，拣货明细本来就是这么生成的。删掉的只是那个把它指向整张历史订单的按钮。真要重算一张历史订单，现在只剩手工执行 SQL 一条路——这是刻意的。
 
 ### 6.4.1 新增与删除交易行（2026-08-08 补）
 
@@ -434,7 +442,7 @@ Customer 卡片右上角两个按钮，对应"这张订单的客户"能出的两
 
 **两个按钮的区别必须在文案里说清。** `Edit` 改的是客户，会波及该客户名下**所有**订单显示的姓名与地址（§6.3、§7.3）；`Replace` 只改这一张订单的归属。用户想修一个错别字却点了 `Replace`，结果是把订单挂到别人名下——所以确认框里写了 "To correct a typo instead, use Edit."
 
-**替换不做审计**（用户决定，2026-08-09）：本库没有 `order_logs` 一类的表，xpros 那两处 `order_logs` insert 无处可落。这意味着"谁在什么时候换掉了这张订单的客户"没有任何痕迹。要补就是单开一张表 + 迁移的事。
+**替换不做审计**（用户决定，2026-08-09）：这意味着"谁在什么时候换掉了这张订单的客户"没有任何痕迹。~~本库没有 `order_logs` 一类的表~~——**该前提已在 2026-08-10 失效**，迁移 `20260810140000` 建了 `public.order_logs`，`20260823120000` 又给 `authenticated` 开了 INSERT 策略（§6.8）。补这条审计现在只是往 `replaceOrderCustomer` 里加一次 insert 的事，决定本身未复议。
 
 **不限制订单状态**（用户决定）：已完成/已取消的订单同样可以替换。历史订单纠错正是这个功能的主要用途，按状态封锁会把它挡在门外。
 
@@ -445,6 +453,66 @@ Customer 卡片右上角两个按钮，对应"这张订单的客户"能出的两
 3. **`customer_id` 的改动不会触发 `order_metrics_summary` 重算。** `trg_oms_orders` 的 UPDATE 分支只比较 `postage_and_handling` / `discount` / `postage_paid` 三列（`docs/order-metrics.md`），所以替换客户就是一次纯 UPDATE。
 
 `replaceOrderCustomer` 放在 `src/lib/actions/order.ts` 而不是并入 `updateOrder`：`updateOrder` 写的是订单自己的列，最坏结果是一个错的运单号；`customer_id` 是指向另一张表的指针，改它会同时重写页面上的收件人与地址，并把订单从一个客户的历史里挪到另一个客户名下。它也在服务端挡掉"换成当前这个客户"——那会是一次报成功但什么都没变的写入。
+
+### 6.8 详情页的动作面（2026-08-23 补，部分移植自 xpros）
+
+本轮把详情页顶部的动作重排了一遍。原来的 `⋯` 菜单只有两项，都是错位的：`Copy invoice number` 藏得太深，`Rebuild picked items` 则是把一个不可逆操作摆在随手可点的位置（§6.4）。
+
+**复制改成行内图标。** 发票号旁边、追踪号后面各一个 `⧉`（`src/components/copy-button.tsx`）。这两个值一天要复制几十次，两次点击比手工选中还慢。`/orders` 列表页的行菜单保留 `Copy invoice number` 不变，只把重复的剪贴板逻辑抽成共享的 `copyToClipboard()`。
+
+**`⋯` 菜单换成三项**：
+
+| 菜单项 | 行为 |
+|---|---|
+| `Create follow-up order` | `createFollowUpOrder(orderId)` → 新标签打开新订单 |
+| `Print invoice` | 新标签打开 `/api/print/invoice?ids=<id>` |
+| `Print shipping label` | 新标签打开 `/api/print/shipping-label?ids=<id>` |
+
+**运送方式改成卡片内的下拉，选完即存**（`shipping-method-select.tsx`）。它只写一列枚举、没有需要一起保持一致的伴生字段，而"发货前把承运商定下来"是订单最常发生的一次编辑。Edit 对话框里那份保留——一次改多个字段时仍然要用它。
+
+- **它会清掉已选报价。** `selectShippingQuote` 本来就是靠写 `orders.shipping_method` 生效的（`docs/shipping-quote-engine.md`），所以手工改方式之后，下面的报价面板会继续标着一条订单已经不遵循的选择。`updateOrderShippingMethod` 在同一次调用里把该订单的 `is_selected` 清成 false。**报价行本身不动**——`order_shipping_quotes` 记的是当天报了多少，不因情况变化而改写（规则 23）。控件下方写明了这一点，因为报价面板在页面更下方、改动不在视野里。
+- 清标志失败只报 warning 不算失败：承运商（标签与 CSV 导出真正读的那一列）已经改掉了。
+- 用 `useOptimistic` 而不是 `useState` + effect：后者是 `react-hooks/set-state-in-effect` 直接报错的写法，前者在 transition 结束时自动回落到服务端的值——成功是新值、失败是旧值，不需要自己记 previous。
+
+**Transactions 一级列表加了缩略图。** 数据早就在了：`fetchOrderTransactionsWithItems` 用 `custom_label → products.sku` 查出 `image_url` 挂在每条交易行上，只是表格从没渲染。用的是交易行**自己**的图，不是第一条拣货明细的——套装按组件拣，拿一个组件的照片代表整个套装比不放图更糟（§6.1 的两层语义）。
+
+#### 6.8.1 `createFollowUpOrder` 的编号规则
+
+`base` = 发票号第一个 `@` 之前的部分；查 `base@%` 的兄弟单，取纯数字后缀的最大值 +1。
+
+**这不是新发明的格式**：迁移过来的数据里已经有 292 张带 `@`（290 个 `@1`、2 个 `@2`），且**全部** `platform = store`。所以新单固定 `status = pending`、`platform = store`，与历史一致。取"第一个 `@` 之前"意味着 `X@1` 的跟进单是 `X@2` 而不是 `X@1@1`。
+
+**新单是空的**，不复制原单的交易行。跟进单是补发、换货或补件，照抄原始行会连带生成拣货明细（`order_transactions_rebuild_items_insert` 是无条件的，§6.4.1），凭空造出一份没人要的出库预期。
+
+**并发靠唯一约束兜底，重试一次。** 读-算-插不是原子的，`orders_invoice_number_unique` 才是裁判；撞车的一方用下一个后缀重试，第三次冲突就不是竞争而是 bug，直接报错。
+
+#### 6.8.2 `order_logs` 在此之前是写不进去的
+
+跟进单要写双向日志，于是撞上了一个已经存在的洞：`order_logs`（迁移 `20260810140000`）开了 RLS 但只建了 SELECT 策略，`authenticated` 的任何 INSERT 都被拒。
+
+这是规则 22 的镜像：`authenticated` 一直握着 Supabase 默认给的表级 INSERT 权限，原迁移里那句 `GRANT SELECT` 是装饰——闸门从头到尾是策略。**唯一的外部症状是 `/fulfillment/export-labels` 每次导出都返回"the order log was not written"**，而那条路径把它当 warning 咽下去了（规则 24：状态已经改了，报导出失败是更糟的答案），所以没人当回事。
+
+迁移 `20260823120000` 加了一条 INSERT 策略，`WITH CHECK (user_id = auth.uid())`——审计行写别人的名字比没有审计行更糟。**故意不加 UPDATE / DELETE 策略**，原迁移"应用改不了的审计表才算审计表"的意图不变：只能追加，不能改写或删除。远端实测（2026-08-23）：本人插入放行、`user_id` 留空被拒、UPDATE / DELETE 影响 0 行（RLS 拒绝这两者是**返回 0 行不是报错**，探测脚本必须看 `rowCount`，规则 22）。
+
+#### 6.8.3 发票 PDF（`/api/print/invoice`）
+
+与 `/api/print/shipping-label` 同构：`@react-pdf/renderer` + `bwip-js` 条码，`runtime = "nodejs"`，走**请求自己的 Supabase 客户端**（要求会话、保留 RLS——发票上有客户姓名地址邮箱），单次 250 张上限。不做 packing slip（用户决定）。
+
+抬头信息的来源是**分开的**：
+
+| 内容 | 来源 | 为什么 |
+|---|---|---|
+| 法人名 `QDD BROS Pty Ltd T/A Go2buy Australia`、ABN `86 985 850 094`、银行 BSB `303-829` / 账号 `0177520` | 写死在 `src/lib/print/company.ts`（用户决定，2026-08-23） | 几乎不变，为它做一页设置是没人会打开第二次的表单 |
+| 通信地址 | `shipping_settings` 的 `sender_*`（`/settings/shipping/constants` 维护） | 同一个地址已经印在包裹标签上，抄第二份就要同步两处 |
+
+两个容易搞反的地方：
+
+1. **GST 是总额的十一分之一，不是加价 10%。** 本系统所有价格都是含 GST 口径（费率卡、Aramex total、售价都是）。反过来算会把税额多报 10%，而票面上看不出任何异常。函数是 `gstIncludedIn()`，`src/lib/print/__tests__/invoice-pdf.test.ts` 有用例锁住。
+2. **只标"未付"，不标"已付"。** `unpaid` 是一个明确的状态，"已付"则只能靠"不是 unpaid"推断——一张错标 PAID 的发票是两个错误里贵的那个。
+3. 小计与总额取自 `order_metrics_summary`，不在这里重新求和，否则发票与订单页可以互相矛盾。
+4. 地址过 `usableAddressLines()`（规则 24）。114,161 个客户的 `address_line3` 是 `ebay:xxxx` 引用码，直拼就会印在账单地址里。
+
+**`Print shipping label` 不按运送方式加限制**（用户决定）。自印 A6 标签严格来说只对 `SELF_PRINT_METHODS` 是"真标签"，但把它当拣货凭条或补打一张是常规操作，纸张没有危害。
 
 ## 7. `/customers` 与 `/customers/[id]`
 
@@ -667,6 +735,21 @@ ANALYZE public.order_items;
 - `searchOrderLineProducts`（`queries/products.ts`）+ `searchOrderLineProductsAction`（`actions/product.ts`）：候选集**不排除套装、也不排除停用商品**——套装正是订单行通常卖的那一层，停用商品也仍在清尾货；两者在列表里打徽章而不是滤掉
 - `orLikePattern`（`queries/search-params.ts`）：原本是 `product-kit-items.ts` 里的私有函数，两处搜索共用后上提。它比 `escapeLike` 多剥掉逗号/括号/引号/反斜杠——这些是 PostgREST `or()` 自己的语法字符，不剥会让请求**格式错误**，而不是查不到
 
+**2026-08-23 追加（详情页动作面，§6.8）**
+
+| 文件 | 角色 |
+|---|---|
+| `supabase/migrations/20260823120000_allow_order_log_inserts.sql` | `order_logs` 的 INSERT 策略（§6.8.2） |
+| `src/components/copy-button.tsx` | `CopyButton` + `copyToClipboard()`，行内复制 |
+| `src/app/(dashboard)/orders/[id]/_components/shipping-method-select.tsx` | 卡片内的承运商下拉，选完即存 |
+| `src/lib/print/company.ts` | 法人名 / ABN / 银行信息 + `gstIncludedIn()` |
+| `src/lib/queries/invoices.ts` | `fetchOrdersForInvoices` |
+| `src/components/pdf/invoice-pdf.tsx` | A4 发票 |
+| `src/app/api/print/invoice/route.ts` | 发票打印路由 |
+| `src/lib/print/__tests__/invoice-pdf.test.ts` | 渲染冒烟 + GST 用例 |
+
+`actions/order.ts` 新增 `updateOrderShippingMethod` 与 `createFollowUpOrder`，删除 `rebuildOrderItems`（§6.4）。`orders-table.tsx` 的私有 `copyInvoice` 改用共享的 `copyToClipboard()`。
+
 `order-row-detail`（列表页展开）与 `order-transactions-table`（详情页展开）是两个组件、两种深度：前者只到交易行 + `Unresolved` 徽章，后者才展开到拣货明细。合并会让列表页为收起状态下的内容多取一层 `order_items`。
 
 ## 11. 验证计划
@@ -674,7 +757,7 @@ ANALYZE public.order_items;
 1. **索引真的被用上**：对搜索查询跑 `EXPLAIN ANALYZE`，确认走 `Bitmap Index Scan` 而非 `Seq Scan`。这是本轮唯一"看起来能用、实际全表扫"的地方——20 万行上跑得动，但每次都是几百毫秒起（无索引时 `customers.full_name ILIKE '%smith%'` 实测 96 ms Seq Scan）。
 2. **首屏耗时**：`/orders` 第 1 页、第 5,000 页各测一次。~~深翻页的 `OFFSET` 在 20 万行上会退化，若超过 1 秒需改游标分页。~~ **已于 2026-08-08 实测：第 1 页 6 ms、第 5,000 页 60 ms，OFFSET 分页保留（§4.3 决策 C）。** 本项复核即可，判据改为「不超过 `authenticated` 的 8 秒预算，且第 5,000 页在 200 ms 内」。
 3. **trigger 联动**：改一条交易行的 `quantity`，确认 `order_items` 被重建、库位继承行为符合 §6.4；改订单的 `comments` / `tracking_number` 确认**没有**触发重建。后半句是本轮最重要的一次验证——trigger 的 `WHEN` 子句就是为它写的。
-4. **`rebuild_order_items_for_order`**：确认重建后 `is_auto_generated` 变 `true`、行数符合当前 BOM。**只在新建的测试订单上做，禁止碰任何历史订单**——该函数是 `DELETE` + `INSERT`，没有回滚路径，历史明细不可再生。（原文写的"挑一个卖过套装的历史订单……测完要能回滚"是错的，回滚不存在。）
+4. ~~**`rebuild_order_items_for_order`**~~：**本项已失效**——UI 入口已于 2026-08-23 删除（§6.4）。该 RPC 只剩交易行触发器这一个调用方，由验证项 3 覆盖。
 5. **未解析行**：确认 313 行在详情页正确高亮，`sku_snapshot` 有展示。
 6. **金额一致性**：抽查几张订单，`order_metrics_summary.order_total` 应等于 `Σ(sale_price × quantity) + orders.postage_and_handling − orders.discount`；至少测一张含负数 `sale_price` 的退款订单。
 7. **无交易行订单**：那 25 张应正常渲染为 0，不能白屏或报错。
@@ -685,6 +768,10 @@ ANALYZE public.order_items;
 12. **状态 tab 计数**：确认 `order_status_counts` 能被 `authenticated` 查到（RLS 经 `security_invoker` 生效），且 8 个 tab 的数字只发一次请求。
 13. **交易行增删**（§6.4.1）：只在测试订单上做。选一个普通商品（应生成 1 条明细，标题与零售价被带入）、一个有 BOM 的套装（应展开多条）、一个 `retail_price = 0` 的套装（Unit price 应留空且不让提交）；删一条套装行，确认其下明细随 CASCADE 一并消失、`Totals` 与交易行计数同步变化。另外确认套装组件选择器（`/products/[id]` 的 Add kit component）改用共享 `ProductPicker` 后行为未变。
 14. **legacy 运送方式保存后不丢**（§4.3 决策 B）：挑一张 `legacy_shipping_method` 非空的订单，改成新枚举值后确认该列**仍保有原值**，且列表/详情显示的是新值。
+15. **承运商下拉清掉已选报价**（§6.8）：挑一张已选过报价的订单，用 Shipping 卡片的下拉改成别的方式，确认 `orders.shipping_method` 变了、`order_shipping_quotes.is_selected` 全为 false、**报价行本身还在**。
+16. **跟进单编号**（§6.8.1）：对一张普通订单建跟进单，得 `base@1`；对它再建一次，得 `base@2`；对一张本身带 `@1` 的历史订单（如 `26031C5D@1`）建跟进单，应得 `26031C5D@2` 而不是 `26031C5D@1@1`。三次都要确认 `order_logs` 里出现**两条**记录（原单一条、新单一条）——这是 `20260823120000` 那条策略唯一的功能性检验。
+17. **发票 PDF**（§6.8.3）：至少打三张——一张带套装与折扣的、一张 `status = unpaid` 的（应出 `PAYMENT OUTSTANDING`）、一张 `address_line3` 是 `ebay:` 引用码的（**账单地址里不能出现它**）。核对 `TOTAL` 与订单页的 `Order total` 逐分相同，`Includes GST` 等于 `TOTAL ÷ 11`。
+18. **A6 面单从详情页也能打**：`⋯ → Print shipping label` 对一张非自印方式的订单同样出图（用户决定不加限制）。
 
 ### 11.1 各场景的实际样本（2026-08-08 从远端取，供逐项验证）
 
@@ -699,7 +786,7 @@ ANALYZE public.order_items;
 | 订单最多的客户（141 张） | `/customers/99686` | 客户详情页分页 |
 | 订单最多的 SKU | `GB00011SF`（`product_id = 11`，7,100 张） | 9（SKU 反查） |
 
-**验证项 4（`rebuild_order_items_for_order`）没有安全的样本**：详情页 `⋯ → Rebuild picked items` 是 `DELETE` + `INSERT`，历史明细不可再生。只能在新建的测试订单上做，**禁止对上表任何一条执行**。
+~~**验证项 4（`rebuild_order_items_for_order`）没有安全的样本**~~：入口已删除（§6.4），本段随之作废。上表任何一条都不要执行该 RPC 的整单形式。
 
 ## 12. 风险与注意事项
 

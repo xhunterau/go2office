@@ -25,6 +25,14 @@ export interface SubmitAramexBatchResult {
   successCount: number
   failures: AramexBatchFailure[]
   consignmentIds: number[]
+  /** Written back to orders.tracking_number, one per successful booking. */
+  trackingNumbers: string[]
+  /**
+   * Bookings Aramex accepted but whose id and label could not be read from the
+   * response, so the order carries no tracking number. Not a failure -- the
+   * parcel is booked -- but it needs a human to look the number up.
+   */
+  untracked: string[]
 }
 
 export const submitAramexBatchTask = task({
@@ -68,6 +76,8 @@ export const submitAramexBatchTask = task({
 
     const failures: AramexBatchFailure[] = []
     const consignmentIds: number[] = []
+    const trackingNumbers: string[] = []
+    const untracked: string[] = []
 
     await metadata.set("progress", { current: 0, total: queue.data.length })
 
@@ -84,7 +94,16 @@ export const submitAramexBatchTask = task({
           fallbacks.fallbacks,
           payload.userId ?? null
         )
-        consignmentIds.push(result.consignmentId)
+        if (result.consignmentId != null) consignmentIds.push(result.consignmentId)
+        if (result.trackingNumber != null) {
+          trackingNumbers.push(result.trackingNumber)
+        } else {
+          untracked.push(order.invoice_number)
+          logger.warn("Aramex booking carried no id or label", {
+            orderId: order.id,
+            invoiceNumber: order.invoice_number,
+          })
+        }
       } catch (error) {
         const reason =
           error instanceof UnmappableOrderError
@@ -102,11 +121,17 @@ export const submitAramexBatchTask = task({
       }
     }
 
+    // successCount counts orders booked, not ids collected: a booking whose id
+    // could not be read is still a parcel Aramex has taken, and counting it as a
+    // failure would invite a second booking for the same order.
+    const successCount = queue.data.length - failures.length
+
     logger.info("Aramex batch complete", {
-      successCount: consignmentIds.length,
+      successCount,
       failureCount: failures.length,
+      untrackedCount: untracked.length,
     })
 
-    return { successCount: consignmentIds.length, failures, consignmentIds }
+    return { successCount, failures, consignmentIds, trackingNumbers, untracked }
   },
 })

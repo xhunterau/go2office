@@ -48,6 +48,17 @@ export default async function OrderDetailPage({
 
       <OrderSummaryCards order={detail.order} />
 
+      {lines.error ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">
+          Failed to load order lines: {lines.error}
+        </div>
+      ) : (
+        <OrderTransactionsTable
+          orderId={detail.order.id}
+          transactions={lines.transactions}
+        />
+      )}
+
       {/* A quote failure is not a reason to hide the panel: the button that
           fixes it lives inside. The batch just comes back empty. */}
       <ShippingQuotesPanel
@@ -59,17 +70,6 @@ export default async function OrderDetailPage({
         hasEstimatedDimensions={detail.order.metrics.has_estimated_dimensions}
         unresolvedItemCount={detail.order.metrics.unresolved_item_count}
       />
-
-      {lines.error ? (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">
-          Failed to load order lines: {lines.error}
-        </div>
-      ) : (
-        <OrderTransactionsTable
-          orderId={detail.order.id}
-          transactions={lines.transactions}
-        />
-      )}
 
       {detail.order.comments && (
         <div className="space-y-2">

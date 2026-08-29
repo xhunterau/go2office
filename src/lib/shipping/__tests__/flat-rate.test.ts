@@ -32,7 +32,7 @@ describe("parseFlatRateMethod", () => {
   })
 
   it("uppercases the size so the enum's `Xs` finds the spec's `XS`", () => {
-    expect(parseFlatRateMethod("Mypost_Reg_Xs_Box")?.sizeLabel).toBe("XS")
+    expect(parseFlatRateMethod("Mypost_Reg_Xs_Satchel")?.sizeLabel).toBe("XS")
   })
 
   it.each(["Mypost_Regular", "Eparcel_Express", "Register_Letter"])(

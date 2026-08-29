@@ -1,7 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { auth, tasks } from "@trigger.dev/sdk"
+import { runs, tasks } from "@trigger.dev/sdk"
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/lib/supabase/database.types"
@@ -24,7 +24,12 @@ import {
 // service-role Supabase client, and bundling that into the Next.js build would
 // ship the service-role path to the server bundle for no reason. The string id
 // below is what actually addresses the task.
-import type { submitAramexBatchTask } from "@/trigger/submit-aramex-batch"
+import type {
+  submitAramexBatchTask,
+  SubmitAramexBatchResult,
+} from "@/trigger/submit-aramex-batch"
+
+import { snapshotOf, type RunSnapshot } from "@/lib/trigger/run-status"
 import { exportFilename } from "@/lib/fulfillment/csv"
 import { buildMyPostCsv } from "@/lib/fulfillment/mypost-csv"
 import { buildEParcelCsv } from "@/lib/fulfillment/eparcel-csv"
@@ -240,9 +245,15 @@ export async function markSelfPrintLabelsPrinted(): Promise<
 
 export type AramexBatchRun = {
   runId: string
-  /** Scoped to reading this one run, so the browser can subscribe to progress. */
-  publicToken: string
 }
+
+/**
+ * Progress and outcome of the Aramex batch, as the page polls for it.
+ *
+ * The status classification behind `finished` lives in
+ * src/lib/trigger/run-status.ts, shared with the allocation postage batch.
+ */
+export type AramexBatchStatus = RunSnapshot<SubmitAramexBatchResult>
 
 /**
  * Starts the Aramex batch. Unlike the CSV exports this cannot be done inline:
@@ -279,12 +290,7 @@ export async function triggerAramexBatch(): Promise<ActionResult<AramexBatchRun>
       { userId: user.id }
     )
 
-    const publicToken = await auth.createPublicToken({
-      scopes: { read: { runs: [run.id] } },
-      expirationTime: "2h",
-    })
-
-    return { success: true, data: { runId: run.id, publicToken } }
+    return { success: true, data: { runId: run.id } }
   } catch (error) {
     // Almost always no dev worker running, or TRIGGER_SECRET_KEY missing. Both
     // read as "failed to start", so the message is worth passing through.
@@ -294,6 +300,37 @@ export async function triggerAramexBatch(): Promise<ActionResult<AramexBatchRun>
         error instanceof Error
           ? error.message
           : "Failed to start the Aramex submission",
+    }
+  }
+}
+
+/**
+ * Polled by the page while a batch is running.
+ *
+ * Deliberately a poll rather than the realtime hook this page used to carry.
+ * On 2026-08-23 run_06g2po1ihq6ev6hld2l8rhdv01 completed in staging and the
+ * browser never heard about it, so the spinner ran forever with every card
+ * disabled behind it. A request the page makes itself either answers or fails
+ * visibly; a subscription that goes quiet is indistinguishable from work still
+ * in progress. The order detail page already polls its quote run the same way.
+ */
+export async function getAramexBatchStatus(
+  runId: string
+): Promise<ActionResult<AramexBatchStatus>> {
+  const supabase = await createClient()
+  const user = await currentUser(supabase)
+  if (!user) return { success: false, error: "Authentication required" }
+
+  try {
+    const run = await runs.retrieve<typeof submitAramexBatchTask>(runId)
+    return { success: true, data: snapshotOf(run) }
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not read the Aramex batch status",
     }
   }
 }

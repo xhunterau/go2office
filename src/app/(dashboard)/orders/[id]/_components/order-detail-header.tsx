@@ -2,11 +2,18 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { ArrowLeft, Copy, MoreHorizontal, Pencil, RefreshCw } from "lucide-react"
+import {
+  ArrowLeft,
+  FileText,
+  GitBranch,
+  MoreHorizontal,
+  Package,
+  Pencil,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import type { OrderDetail } from "@/lib/queries/orders"
-import { rebuildOrderItems } from "@/lib/actions/order"
+import { createFollowUpOrder } from "@/lib/actions/order"
 import { formatDate } from "@/lib/format"
 import {
   ORDER_STATUS_LABELS,
@@ -14,6 +21,7 @@ import {
   SALES_PLATFORM_LABELS,
 } from "@/lib/orders/status"
 import { useConfirm } from "@/components/providers/confirm-provider"
+import { CopyButton } from "@/components/copy-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,40 +38,41 @@ export function OrderDetailHeader({ order }: { order: OrderDetail }) {
   const [editOpen, setEditOpen] = React.useState(false)
   const [isPending, startTransition] = React.useTransition()
 
-  async function copyInvoice() {
-    try {
-      await navigator.clipboard.writeText(order.invoice_number)
-      toast.success(`Copied ${order.invoice_number}`)
-    } catch {
-      toast.error("Could not copy to the clipboard")
-    }
+  // Both print routes render a PDF inline, so a new tab lands on the browser's
+  // own viewer with its print dialog one keystroke away. The shipping label is
+  // offered whatever the carrier: the A6 sheet is only the real label for the
+  // self-print methods, but reprinting one as a picking aid or a spare is a
+  // normal thing to want and there is no harm in the paper.
+  function openPrint(path: string) {
+    window.open(`${path}?ids=${order.id}`, "_blank", "noopener")
   }
 
-  // The only supported way to bring an order's picked lines up to the current
-  // kit contents -- and destructive with no undo, because it replaces what was
-  // actually shipped (docs/orders-ui.md 6.4).
-  async function handleRebuild() {
+  async function handleFollowUp() {
     const ok = await confirm({
-      title: "Rebuild picked items",
+      title: "Create follow-up order",
       description:
-        "This replaces what was actually shipped with today's kit contents. Every picked line on this order is deleted and regenerated, manual pick locations and hand-corrected lines are lost, and there is no undo.",
-      confirmText: "Rebuild",
+        `A new empty order will be created for ${
+          order.customers?.full_name ?? "this customer"
+        }, numbered after ${order.invoice_number}. Add the lines to it yourself — nothing is copied across.`,
+      confirmText: "Create",
       cancelText: "Cancel",
-      variant: "destructive",
     })
     if (!ok) return
 
     startTransition(async () => {
-      const result = await rebuildOrderItems(order.id)
-      if (result.success) {
-        toast.success(
-          `Rebuilt ${result.data?.rowsWritten ?? 0} picked ${
-            result.data?.rowsWritten === 1 ? "line" : "lines"
-          }`
-        )
-      } else {
+      const result = await createFollowUpOrder(order.id)
+      if (!result.success || !result.data) {
         toast.error(result.error ?? "Something went wrong")
+        return
       }
+      const { orderId, invoiceNumber } = result.data
+      toast.success(`Created ${invoiceNumber}`, {
+        action: {
+          label: "Open",
+          onClick: () => window.open(`/orders/${orderId}`, "_blank", "noopener"),
+        },
+      })
+      window.open(`/orders/${orderId}`, "_blank", "noopener")
     })
   }
 
@@ -83,6 +92,10 @@ export function OrderDetailHeader({ order }: { order: OrderDetail }) {
             <h1 className="text-lg font-semibold text-foreground">
               {order.invoice_number}
             </h1>
+            {/* Next to the number rather than in the ⋯ menu: it is copied
+                constantly, and two clicks made it slower than selecting the
+                text by hand. */}
+            <CopyButton value={order.invoice_number} label="invoice number" />
             <Badge variant={ORDER_STATUS_VARIANTS[order.status]}>
               {ORDER_STATUS_LABELS[order.status]}
             </Badge>
@@ -108,28 +121,42 @@ export function OrderDetailHeader({ order }: { order: OrderDetail }) {
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" aria-label="More actions">
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="More actions"
+                disabled={isPending}
+              >
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => void copyInvoice()}>
-                <Copy />
-                Copy invoice number
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
+            {/* An explicit width because the default is the trigger's
+                (w-(--radix-dropdown-menu-trigger-width)), and this trigger is a
+                36px icon button -- the menu collapses to its 128px minimum and
+                wraps every label onto three lines. w-56 matches user-nav. */}
+            <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuItem
-                variant="destructive"
                 disabled={isPending}
                 onSelect={(event) => {
                   // Keep the menu's close animation from unmounting the trigger
                   // before the confirmation dialog has taken focus.
                   event.preventDefault()
-                  void handleRebuild()
+                  void handleFollowUp()
                 }}
               >
-                <RefreshCw />
-                Rebuild picked items
+                <GitBranch />
+                Create follow-up order
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => openPrint("/api/print/invoice")}>
+                <FileText />
+                Print invoice
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => openPrint("/api/print/shipping-label")}
+              >
+                <Package />
+                Print shipping label
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

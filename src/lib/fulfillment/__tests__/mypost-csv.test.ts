@@ -75,15 +75,14 @@ describe("mapPackagingType", () => {
     expect(mapPackagingType("Mypost_Express", "INV-1")).toBe("OWN_PACKAGING")
   })
 
-  // xpros returns OWN_PACKAGING here, which books an XS box as a self-packed
-  // parcel and prices it accordingly, with nothing to show for it.
-  it.each(["Mypost_Reg_Xs_Box", "Mypost_Exp_Xs_Box"] as const)(
-    "refuses %s rather than defaulting",
-    (method) => {
-      expect(() => mapPackagingType(method, "INV-1001")).toThrow(UnmappableOrderError)
-      expect(() => mapPackagingType(method, "INV-1001")).toThrow(/INV-1001/)
-    }
-  )
+  // The map covers every method in MYPOST_METHODS, so this exercises the guard
+  // with a method from another channel. xpros returns OWN_PACKAGING for anything
+  // it has no key for, which books an Australia Post box as a self-packed parcel
+  // and prices it accordingly, with nothing to show for it.
+  it("refuses a method it has no code for rather than defaulting", () => {
+    expect(() => mapPackagingType("Letter", "INV-1001")).toThrow(UnmappableOrderError)
+    expect(() => mapPackagingType("Letter", "INV-1001")).toThrow(/INV-1001/)
+  })
 })
 
 describe("mapDeliveryService", () => {

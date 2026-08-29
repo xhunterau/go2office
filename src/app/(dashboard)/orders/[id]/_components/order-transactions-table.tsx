@@ -44,7 +44,7 @@ import {
 import { TransactionCreateDialog } from "./transaction-create-dialog"
 import { TransactionEditDialog } from "./transaction-edit-dialog"
 
-const COLUMN_COUNT = 7
+const COLUMN_COUNT = 8
 
 // Two levels, visibly nested: a transaction is what the platform sold, the rows
 // under it are what the warehouse picked. A kit sells as one line and is picked
@@ -113,6 +113,7 @@ export function OrderTransactionsTable({
           <TableHeader>
             <TableRow>
               <TableHead className="w-10" />
+              <TableHead className="w-16">Image</TableHead>
               <TableHead>Item</TableHead>
               <TableHead>SKU</TableHead>
               <TableHead className="text-right">Qty</TableHead>
@@ -157,6 +158,16 @@ export function OrderTransactionsTable({
                         >
                           {expanded ? <ChevronDown /> : <ChevronRight />}
                         </Button>
+                      </TableCell>
+                      <TableCell>
+                        {/* The sold product's own photo, resolved from
+                            custom_label -- not the first picked item's, which
+                            on a kit would be one component standing in for the
+                            bundle (queries/orders.ts). */}
+                        <ProductThumb
+                          src={transaction.image_url}
+                          alt={transaction.item_title ?? transaction.custom_label}
+                        />
                       </TableCell>
                       <TableCell className="max-w-md">
                         <div className="flex items-center gap-2">
@@ -304,21 +315,10 @@ function PickedItems({ items }: { items: OrderPickedItem[] }) {
                 )}
               >
                 <TableCell>
-                  {item.image_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={item.image_url}
-                      alt={item.product_name ?? item.sku_snapshot ?? "Product"}
-                      className="size-10 rounded-md object-cover"
-                    />
-                  ) : (
-                    // Same single placeholder as everywhere else: an unresolved
-                    // SKU and a product without a photo are not worth two
-                    // different pictures.
-                    <div className="flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                      <ImageOff className="size-4" />
-                    </div>
-                  )}
+                  <ProductThumb
+                    src={item.image_url}
+                    alt={item.product_name ?? item.sku_snapshot}
+                  />
                 </TableCell>
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-2">
@@ -372,5 +372,34 @@ function PickedItems({ items }: { items: OrderPickedItem[] }) {
         </TableBody>
       </Table>
     </div>
+  )
+}
+
+// Both levels of the table show a picture, so the placeholder and the sizing
+// live in one place. Same single placeholder as everywhere else in the app: an
+// unresolved SKU and a product without a photo are not worth two different
+// pictures.
+function ProductThumb({
+  src,
+  alt,
+}: {
+  src: string | null
+  alt: string | null
+}) {
+  if (!src) {
+    return (
+      <div className="flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        <ImageOff className="size-4" />
+      </div>
+    )
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt ?? "Product"}
+      className="size-10 rounded-md object-cover"
+    />
   )
 }

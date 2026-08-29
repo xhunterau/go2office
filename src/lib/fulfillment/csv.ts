@@ -147,9 +147,9 @@ export function fitAddressLines(
  *
  * The country test is what xpros lacks: it applies +61 to every number it is
  * given, so an overseas customer gets a plausible-looking Australian number
- * built from their own. No order currently in scope is non-AU, but the enum
- * still carries Eparcel_Intl_Express, and a wrong number on a parcel is not
- * something the carrier can report back.
+ * built from their own. Every method go2office ships on is domestic, but the
+ * customer's own address is not guaranteed to be, and a wrong number on a
+ * parcel is not something the carrier can report back.
  *
  * `country` has already been normalised to an ISO code by the
  * customers_standardize_address trigger where it could be (CLAUDE.md rule 21);

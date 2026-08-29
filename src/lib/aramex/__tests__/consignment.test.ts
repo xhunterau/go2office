@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildConsignmentItem,
   mapOrderToConsignment,
+  readConsignmentIds,
 } from "@/lib/aramex/consignment"
 import { UnmappableOrderError } from "@/lib/fulfillment/types"
 import type { DispatchOrder } from "@/lib/queries/fulfillment"
@@ -172,5 +173,45 @@ describe("mapOrderToConsignment", () => {
     expect(() => mapOrderToConsignment(order({ customer: null }), FALLBACKS)).toThrow(
       UnmappableOrderError
     )
+  })
+})
+
+describe("readConsignmentIds", () => {
+  // The shape a live booking actually returns, confirmed against
+  // GET /api/consignments/171295222 on 2026-08-23.
+  it("prefers the article label, which is the number a customer can track", () => {
+    expect(
+      readConsignmentIds({
+        conId: 171295222,
+        items: [{ conItemId: 1, label: "MS0020719756" }],
+      })
+    ).toEqual({ consignmentId: 171295222, trackingNumber: "MS0020719756" })
+  })
+
+  it("falls back to conId when the response carries no label", () => {
+    expect(readConsignmentIds({ conId: 171295222 })).toEqual({
+      consignmentId: 171295222,
+      trackingNumber: "171295222",
+    })
+  })
+
+  // xpros' spelling. The live API does not send it, which is why every booking
+  // before 2026-08-23 wrote the literal string "undefined" to the order.
+  it("still reads xpros' consignmentId if it ever appears", () => {
+    expect(readConsignmentIds({ consignmentId: 42 })).toEqual({
+      consignmentId: 42,
+      trackingNumber: "42",
+    })
+  })
+
+  it("returns nulls rather than a placeholder when nothing can be read", () => {
+    expect(readConsignmentIds({})).toEqual({
+      consignmentId: null,
+      trackingNumber: null,
+    })
+    expect(readConsignmentIds({ items: [{ label: "   " }] })).toEqual({
+      consignmentId: null,
+      trackingNumber: null,
+    })
   })
 })

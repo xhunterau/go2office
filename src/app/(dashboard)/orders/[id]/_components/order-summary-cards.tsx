@@ -8,7 +8,6 @@ import {
   formatMoney,
   formatWeightKg,
 } from "@/lib/format"
-import { displayShippingMethod } from "@/lib/orders/shipping-method"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -18,13 +17,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { CopyButton } from "@/components/copy-button"
 import { CustomerCardActions } from "./customer-card-actions"
+import { ShippingMethodSelect } from "./shipping-method-select"
 
 // Who, how and how much -- the three questions asked of an order before anyone
 // looks at its lines (docs/orders-ui.md 6.2).
 export function OrderSummaryCards({ order }: { order: OrderDetail }) {
   const customer = order.customers
-  const shipping = displayShippingMethod(order)
   const metrics = order.metrics
 
   const packedSize = formatDimensionsMm(
@@ -137,20 +137,30 @@ export function OrderSummaryCards({ order }: { order: OrderDetail }) {
           <CardTitle className="text-sm font-medium">Shipping</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <Field label="Method">
-            <span
-              className={cn(
-                (shipping.isRetired || shipping.isEmpty) &&
-                  "text-muted-foreground"
-              )}
-            >
-              {shipping.label}
-              {shipping.isRetired && (
-                <span className="ml-1 text-xs">(retired)</span>
-              )}
-            </span>
+          {/* Stacked rather than a right-aligned Field value: the carrier is
+              edited in place here, and a full-width control is what makes the
+              31 options readable. */}
+          <div className="space-y-1.5">
+            <span className="text-muted-foreground">Method</span>
+            <ShippingMethodSelect
+              orderId={order.id}
+              value={order.shipping_method}
+              legacyMethod={order.legacy_shipping_method}
+            />
+          </div>
+          <Field label="Tracking">
+            {order.tracking_number ? (
+              <span className="inline-flex items-center gap-1.5">
+                {order.tracking_number}
+                <CopyButton
+                  value={order.tracking_number}
+                  label="tracking number"
+                />
+              </span>
+            ) : (
+              "—"
+            )}
           </Field>
-          <Field label="Tracking">{order.tracking_number ?? "—"}</Field>
           <Field label="Dispatched">{formatDate(order.posted_on_date)}</Field>
           <Field label="Web order ID">{order.web_order_id ?? "—"}</Field>
         </CardContent>

@@ -24,12 +24,10 @@ export const SELF_PRINT_METHODS = [
 export const MYPOST_METHODS = [
   "Mypost_Regular",
   "Mypost_Express",
-  "Mypost_Reg_Xs_Box",
   "Mypost_Reg_S_Box",
   "Mypost_Reg_M_Box",
   "Mypost_Reg_L_Box",
   "Mypost_Reg_XL_Box",
-  "Mypost_Exp_Xs_Box",
   "Mypost_Exp_S_Box",
   "Mypost_Exp_M_Box",
   "Mypost_Exp_L_Box",
@@ -47,14 +45,9 @@ export const MYPOST_METHODS = [
 ] as const satisfies readonly ShippingMethod[]
 
 /**
- * Uploaded to eParcel as a 25-column CSV.
- *
- * Eparcel_Intl_Express is deliberately absent. It needs its own charge code
- * (xpros uses ECM8 on the xhunter contract) plus the OTHER/SALES OF GOODS
- * customs classification, and go2office has neither the code nor a single order
- * on that method -- the whole table is 0 rows. Adding it to this list without
- * the charge code would export international parcels under the domestic code.
- * When the first one appears, `mapChargeCode` throws rather than guessing.
+ * Uploaded to eParcel as a 25-column CSV. Both of go2office's eParcel services
+ * are domestic; there is no international contract, and migration
+ * 20260823110000 dropped Eparcel_Intl_Express from the enum accordingly.
  */
 export const EPARCEL_METHODS = [
   "Eparcel_Regular",
@@ -70,7 +63,6 @@ export const ARAMEX_METHODS = [
 /**
  * Methods with no label channel, and why:
  *
- *   Eparcel_Intl_Express  no charge code yet (see EPARCEL_METHODS), 0 orders
  *   Direct_Freight        carrier not carried by go2office, 0 orders
  *   Click_and_Collect     collected in store; xpros prints a label and merges
  *                         sibling orders, which is out of scope here
@@ -79,7 +71,6 @@ export const ARAMEX_METHODS = [
  * has to be routed or explicitly excused, and doing neither fails the build.
  */
 export const UNROUTED_METHODS = [
-  "Eparcel_Intl_Express",
   "Direct_Freight",
   "Click_and_Collect",
 ] as const satisfies readonly ShippingMethod[]

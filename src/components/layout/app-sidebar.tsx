@@ -6,9 +6,7 @@ import {
   ChevronRight,
   LayoutDashboard,
   Package,
-  Printer,
   ShoppingCart,
-  Users,
   Settings,
   Warehouse,
 } from "lucide-react"
@@ -57,13 +55,16 @@ const settingsItems = [
   { title: "Countries", href: "/settings/countries" },
 ]
 
-const navItems = [
-  { title: "Dashboard", href: "/", icon: LayoutDashboard },
-  { title: "Orders", href: "/orders", icon: ShoppingCart },
-  { title: "Customers", href: "/customers", icon: Users },
-  // Flat rather than a collapsible group: dispatch is one screen today. It sits
-  // after Orders because that is the order the work happens in.
-  { title: "Export Labels", href: "/fulfillment/export-labels", icon: Printer },
+// Orders, Customers and Export Labels are one workflow — a customer places an
+// order, it gets picked, it ships — so they share a group rather than sitting as
+// three flat entries. Listed in the order the work happens in.
+const salesItems = [
+  { title: "Orders", href: "/orders" },
+  { title: "Customers", href: "/customers" },
+  // Between the two on purpose: allocation is what turns a Pending order into a
+  // Processing one, which is the queue Export Labels reads.
+  { title: "Allocation", href: "/fulfillment/allocation" },
+  { title: "Export Labels", href: "/fulfillment/export-labels" },
 ]
 
 export function AppSidebar() {
@@ -72,6 +73,9 @@ export function AppSidebar() {
     pathname.startsWith(item.href)
   )
   const isInventoryActive = inventoryItems.some((item) =>
+    pathname.startsWith(item.href)
+  )
+  const isSalesActive = salesItems.some((item) =>
     pathname.startsWith(item.href)
   )
   const isSettingsActive = pathname.startsWith("/settings")
@@ -180,26 +184,37 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               </Collapsible>
 
-              {navItems
-                .filter((item) => item.href !== "/")
-                .map((item) => {
-                  const isActive = pathname.startsWith(item.href)
-
-                  return (
-                    <SidebarMenuItem key={item.href}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={isActive}
-                        tooltip={item.title}
-                      >
-                        <Link href={item.href}>
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  )
-                })}
+              <Collapsible
+                asChild
+                defaultOpen={isSalesActive}
+                className="group/collapsible"
+              >
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton tooltip="Sales" isActive={isSalesActive}>
+                      <ShoppingCart />
+                      <span>Sales</span>
+                      <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {salesItems.map((item) => (
+                        <SidebarMenuSubItem key={item.href}>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={pathname.startsWith(item.href)}
+                          >
+                            <Link href={item.href}>
+                              <span>{item.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
+                </SidebarMenuItem>
+              </Collapsible>
 
               <Collapsible
                 asChild

@@ -260,6 +260,8 @@ CREATE TYPE public.shipping_method AS ENUM (
 );
 ```
 
+> **2026-08-23 更新**：迁移 `20260823110000` 删掉了 `Mypost_Reg_Xs_Box` / `Mypost_Exp_Xs_Box`（澳邮无 XS 纸箱）与 `Eparcel_Intl_Express`（无国际 eParcel 合约），现存 **31 个值**。三者当时在 `orders` / `carrier_dispatch_options` / `order_shipping_quotes` 三张表上均为 0 行，`004` 的 `CASE` 映射也从不产出它们，故本节下方的映射表不受影响。
+
 **34 个值** = 用户给定的 33 个 + 决策 11 追加的 `Letter`。排列顺序按「信件 → 包裹 → eParcel → MyPost 盒 → MyPost satchel → 其他承运商」分组，纯粹为可读性，不影响语义。
 
 > **命名风格不统一（已知，接受）**：`shipping_method` 用 `PascalCase_Snake`（用户给定的字面值），而 `order_status` / `sales_platform` 沿用项目既有小写风格（与 `stock_movement_kind` 的 `receive` / `move_in` 一致）。若要全库统一，改的是 `order_status` / `sales_platform` 这两个还没落地的类型，成本为零——但要在实现前说。

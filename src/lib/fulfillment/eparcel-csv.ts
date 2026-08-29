@@ -1,6 +1,7 @@
 import { mmToCm } from "@/lib/shipping/dimensions"
 import type { ShippingMethod } from "@/lib/orders/shipping-method"
 import type { DispatchOrder } from "@/lib/queries/fulfillment"
+import type { EPARCEL_METHODS } from "@/lib/fulfillment/carrier-groups"
 import {
   cleanCommas,
   fitAddressLines,
@@ -12,6 +13,8 @@ import {
   UnmappableOrderError,
   type ContactFallbacks,
 } from "@/lib/fulfillment/types"
+
+type EParcelMethod = (typeof EPARCEL_METHODS)[number]
 
 // The 25-column eParcel bulk template. It has no sender columns at all: the
 // charge code identifies the account, and the account carries the address.
@@ -89,10 +92,10 @@ const FILLER_DIMENSION_CM = 12
  * accept, so nothing would ever surface it.
  *
  * xpros' Z6 codes (3D85 / 3J85) have no equivalent here -- that account was not
- * carried over -- and Eparcel_Intl_Express is absent from EPARCEL_METHODS
- * because its code is not known and no order uses it.
+ * carried over. Keyed on EPARCEL_METHODS so a new eParcel service cannot be
+ * routed to this exporter without a code being decided for it.
  */
-const CHARGE_CODES: Partial<Record<ShippingMethod, string>> = {
+const CHARGE_CODES: Partial<Record<EParcelMethod, string>> = {
   Eparcel_Regular: "3D55",
   Eparcel_Express: "3J55",
 }
@@ -101,7 +104,7 @@ export function mapChargeCode(
   method: ShippingMethod,
   invoiceNumber: string
 ): string {
-  const code = CHARGE_CODES[method]
+  const code = CHARGE_CODES[method as EParcelMethod]
   if (!code) {
     throw new UnmappableOrderError(
       invoiceNumber,

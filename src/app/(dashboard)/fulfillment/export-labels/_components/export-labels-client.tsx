@@ -2,36 +2,26 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { useRealtimeRun } from "@trigger.dev/react-hooks"
 import { toast } from "sonner"
 import { Loader2, MailOpen, Package, Printer, Truck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
+import { useBatchRunPoll } from "@/hooks/use-batch-run-poll"
 import {
   exportEParcelCsv,
   exportMyPostCsv,
+  getAramexBatchStatus,
   markSelfPrintLabelsPrinted,
   triggerAramexBatch,
   type CsvExportResult,
 } from "@/lib/actions/fulfillment"
 import type { ActionResult } from "@/lib/actions/action-result"
 import type { SubmitAramexBatchResult } from "@/trigger/submit-aramex-batch"
+import type { RunProgress } from "@/lib/trigger/run-status"
 
 type QueueKey = "self-print" | "mypost" | "eparcel" | "aramex"
-
-type RunState = { runId: string; publicToken: string }
-
-// Statuses a run can end on without having completed. Anything else is either
-// still in flight or COMPLETED.
-const TERMINAL_FAILURES = new Set([
-  "FAILED",
-  "CRASHED",
-  "CANCELED",
-  "SYSTEM_FAILURE",
-  "INTERRUPTED",
-  "TIMED_OUT",
-])
 
 function downloadCsv(csv: string, filename: string): void {
   // A BOM, so Excel opens the file as UTF-8 instead of guessing the local
@@ -81,7 +71,27 @@ export function ExportLabelsClient({
   // second source of truth that can disagree with the database.
   const router = useRouter()
   const [busy, setBusy] = React.useState<QueueKey | null>(null)
-  const [aramexRun, setAramexRun] = React.useState<RunState | null>(null)
+
+  // The poll loop, the eight-minute ceiling and the manual escape are shared
+  // with the allocation postage batch (src/hooks/use-batch-run-poll.ts). Only
+  // what to say about the result is particular to Aramex.
+  const {
+    progress: aramexProgress,
+    running: aramexRunning,
+    start: startAramexPoll,
+    stop: stopAramexPoll,
+  } = useBatchRunPoll<SubmitAramexBatchResult>({
+    read: getAramexBatchStatus,
+    onFinished: (outcome, note) => {
+      setBusy(null)
+      if (!outcome) {
+        toast.error(note ?? "The Aramex submission did not finish. Check the run log.")
+      } else {
+        reportAramexOutcome(outcome)
+      }
+      router.refresh()
+    },
+  })
 
   async function runCsvExport(
     key: Exclude<QueueKey, "self-print">,
@@ -147,34 +157,9 @@ export function ExportLabelsClient({
       return
     }
 
-    // `busy` stays set until the run finishes; the watcher below clears it.
-    setAramexRun(result.data)
-  }
-
-  function onAramexFinished(outcome: SubmitAramexBatchResult | null) {
-    setAramexRun(null)
-    setBusy(null)
-
-    if (!outcome) {
-      toast.error("The Aramex submission did not finish. Check the run log.")
-    } else if (outcome.failures.length === 0) {
-      toast.success(
-        `${outcome.successCount} consignment${outcome.successCount > 1 ? "s" : ""} booked`
-      )
-    } else {
-      toast.warning(
-        `${outcome.successCount} booked, ${outcome.failures.length} failed`,
-        {
-          description: outcome.failures
-            .slice(0, 4)
-            .map((failure) => `${failure.invoiceNumber}: ${failure.reason}`)
-            .join(" · "),
-          duration: 20_000,
-        }
-      )
-    }
-
-    router.refresh()
+    // `busy` stays set until the poll sees a terminal status, the timeout
+    // fires, or the operator stops waiting -- all three land in onFinished.
+    startAramexPoll(result.data.runId)
   }
 
   return (
@@ -215,71 +200,51 @@ export function ExportLabelsClient({
       <QueueCard
         icon={Truck}
         title="Aramex"
-        description="Books each order with Aramex over the API — there is no file to upload. The consignment id is written back to the order as its tracking number, and an order that fails is reported by invoice while the rest of the batch continues."
+        description="Books each order with Aramex over the API — there is no file to upload. The tracking number comes back on the booking and is written to the order; an order that fails is reported by invoice while the rest of the batch continues."
         count={aramexCount}
         actionLabel="Book consignments"
-        busy={busy === "aramex"}
+        busy={busy === "aramex" || aramexRunning}
         disabled={busy != null || exportsDisabled}
+        progress={aramexProgress}
         onRun={startAramexBatch}
+        onStopWaiting={() =>
+          stopAramexPoll(
+            "Stopped waiting. The batch may still be running — reload the page to see the queue."
+          )
+        }
       />
-
-      {aramexRun ? (
-        <AramexRunWatcher run={aramexRun} onFinished={onAramexFinished} />
-      ) : null}
     </div>
   )
 }
 
-/**
- * Subscribes to the batch run so the operator sees progress rather than a
- * spinner that could mean anything. Rendered only while a run is live, because
- * useRealtimeRun opens a connection for as long as it is mounted.
- */
-function AramexRunWatcher({
-  run: runState,
-  onFinished,
-}: {
-  run: RunState
-  onFinished: (outcome: SubmitAramexBatchResult | null) => void
-}) {
-  const { run, error } = useRealtimeRun(runState.runId, {
-    accessToken: runState.publicToken,
-  })
 
-  const onFinishedRef = React.useRef(onFinished)
-  React.useEffect(() => {
-    onFinishedRef.current = onFinished
-  }, [onFinished])
+function reportAramexOutcome(outcome: SubmitAramexBatchResult): void {
+  const booked = `${outcome.successCount} consignment${outcome.successCount > 1 ? "s" : ""} booked`
 
-  const status = run?.status
-  React.useEffect(() => {
-    if (!status) return
-    if (status === "COMPLETED") {
-      onFinishedRef.current((run?.output as SubmitAramexBatchResult) ?? null)
-    } else if (TERMINAL_FAILURES.has(status)) {
-      onFinishedRef.current(null)
-    }
-    // `run.output` is only read once the status says it is there, so status is
-    // the only dependency that should re-fire this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status])
+  if (outcome.failures.length > 0) {
+    toast.warning(`${booked}, ${outcome.failures.length} failed`, {
+      description: outcome.failures
+        .slice(0, 4)
+        .map((failure) => `${failure.invoiceNumber}: ${failure.reason}`)
+        .join(" · "),
+      duration: 20_000,
+    })
+  } else {
+    toast.success(booked)
+  }
 
-  React.useEffect(() => {
-    if (error) onFinishedRef.current(null)
-  }, [error])
-
-  const progress = run?.metadata?.progress as
-    | { current: number; total: number }
-    | undefined
-
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-border p-4 text-sm text-muted-foreground sm:col-span-2 xl:col-span-3">
-      <Loader2 className="size-4 animate-spin" />
-      {progress
-        ? `Booking consignment ${progress.current} of ${progress.total}...`
-        : "Starting the Aramex batch..."}
-    </div>
-  )
+  // Booked, but nothing to track it by. Separate from a failure: the parcel is
+  // with Aramex either way, so this is a note to go and find the number, not an
+  // invitation to book it again.
+  if (outcome.untracked.length > 0) {
+    toast.warning(
+      `${outcome.untracked.length} booking${outcome.untracked.length > 1 ? "s" : ""} came back without a tracking number`,
+      {
+        description: `${outcome.untracked.slice(0, 5).join(", ")} — look the consignment up in the Aramex portal and set the tracking number on the order by hand.`,
+        duration: 20_000,
+      }
+    )
+  }
 }
 
 function QueueCard({
@@ -290,7 +255,9 @@ function QueueCard({
   actionLabel,
   busy,
   disabled,
+  progress,
   onRun,
+  onStopWaiting,
 }: {
   icon: React.ElementType
   title: string
@@ -299,9 +266,20 @@ function QueueCard({
   actionLabel: string
   busy: boolean
   disabled: boolean
+  /**
+   * Present only for the Aramex batch, which reports how far through the queue
+   * it is. The other three are a single server round trip: the bar they get is
+   * indeterminate, because there is no honest percentage to show.
+   */
+  progress?: RunProgress | null
   onRun: () => void
+  onStopWaiting?: () => void
 }) {
   const hasOrders = count > 0
+  const pct =
+    progress && progress.total > 0
+      ? Math.round((progress.current / progress.total) * 100)
+      : null
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border p-4">
@@ -317,6 +295,35 @@ function QueueCard({
 
       <p className="flex-1 text-sm text-muted-foreground">{description}</p>
 
+      {busy ? (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              {progress
+                ? `Booking consignment ${progress.current} of ${progress.total}`
+                : onStopWaiting
+                  ? "Starting the batch"
+                  : "Preparing"}
+            </span>
+            {pct !== null ? (
+              <span className="tabular-nums">
+                {progress?.current} / {progress?.total}
+              </span>
+            ) : null}
+          </div>
+          <Progress value={pct} />
+          {onStopWaiting ? (
+            <button
+              type="button"
+              onClick={onStopWaiting}
+              className="self-start text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              Stop waiting
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <Button
         size="sm"
         className="w-full"
@@ -326,7 +333,9 @@ function QueueCard({
         {busy ? (
           <>
             <Loader2 className="size-4 animate-spin" />
-            Working...
+            {progress
+              ? `Booking ${progress.current} of ${progress.total}...`
+              : "Working..."}
           </>
         ) : (
           <>

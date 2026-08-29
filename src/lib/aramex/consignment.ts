@@ -125,7 +125,35 @@ export function mapOrderToConsignment(
 export type ConsignmentResult = {
   orderId: number
   invoiceNumber: string
-  consignmentId: number
+  /** Aramex's internal id for the booking. Null if the response carried none. */
+  consignmentId: number | null
+  /** What went into orders.tracking_number, or null if nothing could be read. */
+  trackingNumber: string | null
+}
+
+/**
+ * What to store as the order's tracking number.
+ *
+ * The article label (e.g. "MS0020719756") is the number a customer can track;
+ * conId (e.g. 171295222) is Aramex's internal handle and looks up nothing on
+ * their site. Prefer the label, fall back to the id so the order is at least
+ * connected to the booking, and return null rather than inventing a value --
+ * `String(undefined)` is how the literal text "undefined" ended up in
+ * orders.tracking_number on 2026-08-23.
+ */
+export function readConsignmentIds(body: AramexConsignmentResponse["data"]): {
+  consignmentId: number | null
+  trackingNumber: string | null
+} {
+  // conId is what the live API sends; consignmentId is xpros' spelling, kept in
+  // case it ever appears. See the type for the full story.
+  const consignmentId = body.conId ?? body.consignmentId ?? null
+  const label = body.items?.[0]?.label?.trim()
+
+  return {
+    consignmentId,
+    trackingNumber: label || (consignmentId != null ? String(consignmentId) : null),
+  }
 }
 
 /**
@@ -151,37 +179,55 @@ export async function submitConsignment(
     body: JSON.stringify(payload),
   })
 
-  const consignmentId = response.data.consignmentId
+  const { consignmentId, trackingNumber } = readConsignmentIds(response.data)
 
   // Aramex has already accepted the booking at this point, so a failed write
   // here must be loud: the parcel is committed and the only record of it is in
   // the error. Retrying the task would book a second consignment.
+  //
+  // tracking_number is left alone when nothing could be read -- an unparsed
+  // response must not overwrite the column with a placeholder. It is safe past
+  // normalize_tracking_number either way (CLAUDE.md rule 20): an "MS..." label
+  // matches no prefix rule and a bare id is not the MyPost numeric branch,
+  // which needs both a `99` start and more than 23 characters.
   const { data: updated, error } = await supabase
     .from("orders")
     .update({
       status: LABELLED_STATUS,
-      tracking_number: String(consignmentId),
+      ...(trackingNumber ? { tracking_number: trackingNumber } : {}),
     })
     .eq("id", order.id)
     .select("id")
     .maybeSingle()
 
+  // Rule 24: the id has to travel with the error, or a booking Aramex accepted
+  // is lost. `describe` also carries the raw body when nothing could be read,
+  // because then the response itself is the only trace of the consignment.
+  const describe =
+    consignmentId != null
+      ? `consignment ${consignmentId}`
+      : `a consignment whose id could not be read from ${JSON.stringify(response.data).slice(0, 500)}`
+
   if (error) {
     throw new Error(
-      `Aramex booked consignment ${consignmentId} for ${order.invoice_number}, ` +
+      `Aramex booked ${describe} for ${order.invoice_number}, ` +
         `but the order could not be updated: ${error.message}`
     )
   }
   if (!updated) {
     throw new Error(
-      `Aramex booked consignment ${consignmentId} for ${order.invoice_number}, ` +
+      `Aramex booked ${describe} for ${order.invoice_number}, ` +
         `but the order row could not be written to. Record the consignment manually.`
     )
   }
 
   await supabase.from("order_logs").insert({
     order_id: order.id,
-    action: `Aramex consignment ${consignmentId} created`,
+    action:
+      trackingNumber != null
+        ? `Aramex ${describe} created, tracking ${trackingNumber}`
+        : `Aramex accepted a booking but returned no id or label: ` +
+          JSON.stringify(response.data).slice(0, 500),
     user_id: userId,
   })
 
@@ -189,5 +235,6 @@ export async function submitConsignment(
     orderId: order.id,
     invoiceNumber: order.invoice_number,
     consignmentId,
+    trackingNumber,
   }
 }

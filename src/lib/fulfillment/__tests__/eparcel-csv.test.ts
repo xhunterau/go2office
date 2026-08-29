@@ -60,13 +60,13 @@ describe("mapChargeCode", () => {
     expect(mapChargeCode("Eparcel_Express", "INV-1")).toBe("3J55")
   })
 
-  // xpros defaults to 3D55, which would bill an international consignment at
-  // the domestic rate and still produce a label the carrier accepts.
+  // xpros defaults to 3D55, which bills whatever it was handed at the regular
+  // domestic rate and still produces a label the carrier accepts.
   it("refuses a method with no configured code, naming the invoice", () => {
-    expect(() => mapChargeCode("Eparcel_Intl_Express", "INV-2001")).toThrow(
+    expect(() => mapChargeCode("Parcel_Post", "INV-2001")).toThrow(
       UnmappableOrderError
     )
-    expect(() => mapChargeCode("Eparcel_Intl_Express", "INV-2001")).toThrow(/INV-2001/)
+    expect(() => mapChargeCode("Parcel_Post", "INV-2001")).toThrow(/INV-2001/)
   })
 })
 

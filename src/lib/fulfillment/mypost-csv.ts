@@ -1,6 +1,7 @@
 import { mmToCm } from "@/lib/shipping/dimensions"
 import type { ShippingMethod } from "@/lib/orders/shipping-method"
 import type { DispatchOrder } from "@/lib/queries/fulfillment"
+import type { MYPOST_METHODS } from "@/lib/fulfillment/carrier-groups"
 import {
   cleanCommas,
   fitAddressLines,
@@ -13,6 +14,8 @@ import {
   type ContactFallbacks,
   type SenderBlock,
 } from "@/lib/fulfillment/types"
+
+type MyPostMethod = (typeof MYPOST_METHODS)[number]
 
 // The 23-column MyPost Business bulk upload. Column order is the portal's and
 // must not be rearranged -- the importer matches by position, not by header.
@@ -48,16 +51,18 @@ const ADDRESS_SLOTS = 3
 const ADDRESS_MAX = 40
 
 /**
- * Australia Post's packaging codes.
+ * Australia Post's packaging codes, one per method in MYPOST_METHODS.
  *
- * No `?? 'OWN_PACKAGING'` default, unlike xpros. go2office's enum carries
- * Mypost_Reg_Xs_Box and Mypost_Exp_Xs_Box, which xpros' map has no key for; a
- * default would book those as self-packed parcels and price them accordingly,
- * with nothing to show it happened. They are absent here because the portal's
- * code for an XS box has not been confirmed, and both have 0 orders. The first
- * one to appear fails the export by name.
+ * Keyed on that list rather than on ShippingMethod at large, so adding a MyPost
+ * method without deciding how it is packaged is a compile error here -- the same
+ * bargain carrier-groups.ts strikes for label channels.
+ *
+ * `mapPackagingType` still throws instead of defaulting. xpros falls back to
+ * `?? 'OWN_PACKAGING'`, which books an Australia Post box as a self-packed
+ * parcel and prices it that way, with nothing anywhere to show it happened. The
+ * throw is the guard for whatever gets added next; the map is complete today.
  */
-const PACKAGING_CODES: Partial<Record<ShippingMethod, string>> = {
+const PACKAGING_CODES: Partial<Record<MyPostMethod, string>> = {
   Mypost_Regular: "OWN_PACKAGING",
   Mypost_Express: "OWN_PACKAGING",
   Mypost_Reg_S_Box: "AP_BOX_S",
@@ -97,7 +102,7 @@ export function mapPackagingType(
   method: ShippingMethod,
   invoiceNumber: string
 ): string {
-  const code = PACKAGING_CODES[method]
+  const code = PACKAGING_CODES[method as MyPostMethod]
   if (!code) {
     throw new UnmappableOrderError(
       invoiceNumber,

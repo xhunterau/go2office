@@ -126,7 +126,7 @@ Trigger.dev 侧的 **Go2office 项目已创建**（2026-08-15，Xhunter AU 组�
 
 **实测**（dev worker `20260822.1`）：订单 205970 触发两次，各 1.6 秒完成、11 行报价、均选中 `Register_Letter` $5.00。两个批次共 22 行落库，全表仅 1 行 `is_selected` —— §0.3 第 6 条那个「先清上一批」的改动在真实唯一索引上验证通过。`orders` 行未被改动。
 
-**还没做的一步**：Trigger.dev 控制台的 Environment Variables 尚未配置（6 个变量，见 [current_tasks.md](current_tasks.md)）。部署环境读不到 `.env.local`，所以该 Task 目前**只在本地 dev 环境可用**，`npx trigger.dev deploy` 之前必须先补。
+~~**还没做的一步**：Trigger.dev 控制台的 Environment Variables 尚未配置~~ —— **2026-08-29 更正**：已配置。staging 有三次真实部署（`v20260822.1` / `v20260822.2` / `v20260823.1`），本 Task 从 2026-08-22 起就是跑在部署版上的，不是本地 dev worker。详见 [current_tasks.md](current_tasks.md) 表头那条警告。
 
 ---
 
@@ -281,7 +281,7 @@ xpros 的报价引擎支持 6 个承运商，go2office 只保留 3 个。裁剪�
 
 `Letter`（134,391 张历史订单，66%）**不配报价选项**——与 xpros 一致。它是无追踪平信，没有可查询的费率结构。
 
-> **注意**：go2office 的 `shipping_method` 枚举里有 `Mypost_Reg_Xs_Box` 和 `Mypost_Exp_Xs_Box`，但 Australia Post **没有 XS 尺寸的纸箱**（`flat_rate_package_specs` 里 box 只有 S/M/L/XL）。这两个枚举值保持不配置报价选项即可，不要为了「凑齐」而造一条查不到规格的选项——那会在报价表里永久显示一行 `No spec for box XS` 的错误。
+> **注**：`Mypost_Reg_Xs_Box` / `Mypost_Exp_Xs_Box` 曾在枚举里占位（Australia Post 没有 XS 纸箱，`flat_rate_package_specs` 的 box 只有 S/M/L/XL），当时的处置是不给它们配报价选项。迁移 `20260823110000` 已把这两个值连同 `Eparcel_Intl_Express` 从枚举中删除。XS **袋**是真实规格，不受影响。
 
 ---
 

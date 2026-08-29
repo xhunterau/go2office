@@ -3,7 +3,6 @@
 import * as React from "react"
 import Link from "next/link"
 import { ChevronDown, ChevronRight, Copy, MoreHorizontal, Pencil } from "lucide-react"
-import { toast } from "sonner"
 
 import type { OrderListRow, OrderTransaction } from "@/lib/queries/orders"
 import { loadOrderTransactions } from "@/lib/actions/order"
@@ -15,6 +14,7 @@ import {
   SALES_PLATFORM_LABELS,
 } from "@/lib/orders/status"
 import { cn } from "@/lib/utils"
+import { copyToClipboard } from "@/components/copy-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -79,17 +79,6 @@ export function OrdersTable({
     setExpandedId(orderId)
     setLinesError(null)
     if (!lines[orderId]) void loadLines(orderId)
-  }
-
-  async function copyInvoice(invoiceNumber: string) {
-    try {
-      await navigator.clipboard.writeText(invoiceNumber)
-      toast.success(`Copied ${invoiceNumber}`)
-    } catch {
-      // Clipboard access is denied outside a secure context and in some
-      // embedded browsers. Failing silently would look like the click missed.
-      toast.error("Could not copy to the clipboard")
-    }
   }
 
   return (
@@ -241,7 +230,10 @@ export function OrdersTable({
                             <MoreHorizontal />
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
+                        {/* Width set for the same reason as the detail
+                            header's: an icon-button trigger otherwise squeezes
+                            the menu to 128px and wraps the labels. */}
+                        <DropdownMenuContent align="end" className="w-56">
                           <DropdownMenuItem asChild>
                             <Link href={`/orders/${row.id}`}>
                               <Pencil />
@@ -249,7 +241,7 @@ export function OrdersTable({
                             </Link>
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onSelect={() => void copyInvoice(row.invoice_number)}
+                            onSelect={() => void copyToClipboard(row.invoice_number)}
                           >
                             <Copy />
                             Copy invoice number
