@@ -177,10 +177,59 @@ async function onSubmit(values) {
 | 轮询（共享） | [src/lib/trigger/run-status.ts](../src/lib/trigger/run-status.ts) · [src/hooks/use-batch-run-poll.ts](../src/hooks/use-batch-run-poll.ts) |
 | 地址联想 | [src/components/orders/address-autocomplete.tsx](../src/components/orders/address-autocomplete.tsx) |
 | 页面 | `src/app/(dashboard)/fulfillment/allocation/{page,address/page,postage/page}.tsx` |
-| 组件 | 同目录 `_components/`：`address-stage-client` · `address-order-card` · `postage-stage-client` · `manual-approval-dialog` |
-| 单测 | `src/lib/validations/__tests__/allocation.test.ts`（23 条） |
+| 组件 | 同目录 `_components/`：`address-stage-client` · `address-order-card` · `postage-stage-client` · `postage-order-dialog` · `manual-approval-dialog` |
+| 共享组件 | [src/components/products/product-thumb.tsx](../src/components/products/product-thumb.tsx)（与订单详情页共用，§8.2） |
+| 标题截断 | [src/lib/orders/item-title.ts](../src/lib/orders/item-title.ts)（§8.2） |
+| 单测 | `src/lib/validations/__tests__/allocation.test.ts`（23 条） · `src/lib/orders/__tests__/item-title.test.ts`（11 条） |
 
 **顺带的重构**：`/fulfillment/export-labels` 的 Aramex 轮询原本是页面内手写的，已改为共用 `useBatchRunPoll` + `snapshotOf`。状态分类那段（`LIVE_STATUSES` 与编译期穷尽性检查）现在只有一份。
+
+## 8.1 Postage 队列的订单弹窗（2026-11-08）
+
+原本一行点开是**展开行**，报价表塞在表格里。问题不是样式：展开区只能撑到主表那几列的宽度，于是队列长成了八个数字，而**决定选哪个档位真正要看的东西一个都不在上面**——箱子里是什么、完整地址、装箱多大、那个尺寸是量出来的还是猜的。操作员要知道这些只能点 Invoice 跳 `/orders/[id]`，代价是丢掉在队列里的位置。
+
+现在单击一行开 `postage-order-dialog`，分五段：抬头 / Ship to / What's in it / Weight & size / Rates（含 Approve）。
+
+**单击而非双击**（用户原提议双击）：触屏上没有双击手势，而规则 12 要求移动端与桌面端各验一遍；桌面上双击还会选中行内文本。单击原本就是展开手势，改成开弹窗是原地替换。Invoice 链接保留 `stopPropagation()`，点它仍跳订单详情页。行上另加了 `tabIndex` 与 Enter / Space 处理——可点击的 `<tr>` 本身不可聚焦，而这一行现在是进入订单的唯一入口。
+
+**查询层补了 6 列**，都是 `order_metrics_summary` 早就算好、页面从没取过的：`packed_length/width/height_mm`（报价所依据的装箱估算）、`total_items`、`has_estimated_dimensions`、`unresolved_item_count`。纯加列，不多一次往返。
+
+**主表的 Weight 列换成了计费重（`chargeable_weight_kg`）**。承运商按实重与体积重取大计费，而该列原先显示实重——拿它选档位就是拿错数字。队列里的 `26032486` 正是实例：实重 0.160 kg，计费重 0.328 kg，两倍有余。
+
+**两个数据质量标志被提到主行上**，不只藏在弹窗里：`has_estimated_dimensions`（864 / 3123 个商品即 28% 没有实测尺寸，按 10 mm 兜底，所以约三成订单的装箱尺寸是猜的）与 `unresolved_item_count > 0`（明细解析不到商品，物理指标全部被低估）。`order_metrics_summary` 的迁移注释原话是「the UI should say so rather than print it like a measurement」。当前队列这两项都是 0，所以徽章在现有样本下不出现——它们管的是少见但关键的那种单。
+
+**地址必须过 `usableAddressLines()`**（规则 24）：`address_line3` 非空的 114,193 行里 114,161 行是 `ebay:xxxx` 引用码而不是地址，直接拼四列就是把 eBay 引用码当街道显示。PO Box 徽章复用 `isPostalOnlyAddress()`——同一个判断把 Aramex 从该单报价里剔掉，所以徽章解释的正是操作员眼前那份承运商清单（205977 的 Aramex 缺席就是它）。
+
+**订单明细按需取**：`loadOrderContents()` 复用现成的 `fetchOrderTransactionsWithItems()`，弹窗打开时才查。21 行队列预加载全部明细是每单两跳白跑。状态按 `orderId` 键入而非在 id 变化时清空——否则要在 effect 里同步 setState（eslint `react-hooks/set-state-in-effect` 会拦），而中间那次陈旧渲染会把上一张单的明细显示在这一张的抬头下面。
+
+**Approve 加了二次确认**，走共享的 `useConfirm`（规则 9），不是一次性弹窗。理由是它单向：订单进 `processing` 后只有手写 UPDATE 能回来。确认文案把承运商与价格重复一遍。
+
+**弹窗内带上一张 / 下一张导航**。21 张单各开关一次是 42 次多余点击，且每次都丢掉在列表里的位置。当前订单是从 `orders` 数组按 id 查出来的、不是自己存一份副本，这样弹窗背后发生 `router.refresh()` 时显示的是新报价而不是打开那一刻的旧值。
+
+规则 12：`max-h-[85vh]` + `overflow-y-auto`——报价表本身就能跑到二十几行。
+
+## 8.2 明细行的缩略图与标题截断（2026-11-10）
+
+弹窗第一版的 What's in it 只有文字，且标题把 SKU / Qty / Price 全挤出了表格（出现横向滚动条）。两件事一起修。
+
+**`line-clamp-2` 在这里从来没生效过。** `<Table>` 是 `table-auto`，列宽由内容撑开；单元格没有宽度上限时，clamp 容器的宽度就等于文本宽度，永远不换行。要让任何 CSS 截断起作用，单元格必须先有 `max-w-*`——订单详情页的 `max-w-md` + `truncate` 一直是对的，弹窗漏了这一半。
+
+**但 CSS 截断在这张表上是错的答案。** eBay 标题是关键词堆砌，真正区分货品的变体挂在末尾方括号里：
+
+```
+Wall Stickers Removable Art Vinyl Quote Decal Mural Home Room DIY Decor Windows[Our Kitchen Rules]
+└────────────────────── 前 78 字符是关键词 ──────────────────────┘└──── 唯一的信息 ────┘
+```
+
+`order_transactions` 抽样 5400 行，**62.2% 以 `[...]` 结尾**；当前队列 21 行里 12 行如此。其中 4 行是 Beston 电池，前 78 字符完全相同，长度 95 / 96 / 97 / 116，差异**全部**在方括号内。所以 `truncate` 或头部切片会把这四行渲染成同一行字——而「拣哪个货」正是这张表要回答的问题。
+
+`shortenItemTitle()`（[src/lib/orders/item-title.ts](../src/lib/orders/item-title.ts)，11 条单测）因此掐中间、留两头：正文 45 字符、变体 30 字符，无方括号的标题退化为 70 字符尾部截断，词边界优先但不接受砍掉六成以上（标题可能是一个不含空格的长 token）。完整原文走 `title` 属性，存储值不变。
+
+实跑队列 21 条真实标题：最长输出 75 字符（原 116），**截断后仍两两不同（21/21）**，四条 Beston 分别收敛为 `[16pcs AAA 1100mAh]` / `[4pcs AAA 1100mAh + 4-Slot Qc…]` / `[8pcs AA 1200mAh]` / `[8pcs AAA 1100mAh]`。
+
+**`ProductThumb` 提到了 [src/components/products/product-thumb.tsx](../src/components/products/product-thumb.tsx)**（规则 5）。它原本是 `order-transactions-table.tsx` 里的局部函数，没导出。两处共用同一份，含无图时的 `ImageOff` 占位；队列 21 行里 19 行有图。用的是 transaction 自己的图（由 `custom_label` 解析），不是第一个拣货件的——套装会拿一个组件的照片冒充整个套装。保持 `<img>` 而非 `next/image`：这些是数量未知的远端主机，`remotePatterns` 漏掉哪个就 400。
+
+**订单详情页同步换用同一个函数**，否则同一条标题在两个页面显示不同。那里原先是 CSS `truncate`，有一样的丢变体问题。
 
 ## 9. 远端验证
 
@@ -233,14 +282,36 @@ async function onSubmit(values) {
 
 订单**现在就停在 Postage 队列里、带着这 9 行报价**，等着在浏览器里被点一次 Approve —— 那正是最需要人工验的一步。
 
+### 9.3 模拟单（`scripts/simulation/seed-dispatch-simulation.mjs`）
+
+上游没有订单来源（§10），所以整条 Address → Postage → Approve → Export Labels 的流程要靠这个脚本放料进去。
+
+```bash
+npx dotenv-cli -e .env.local -- node scripts/simulation/seed-dispatch-simulation.mjs --apply    # 放料
+npx dotenv-cli -e .env.local -- node scripts/simulation/seed-dispatch-simulation.mjs --status   # 看当前
+npx dotenv-cli -e .env.local -- node scripts/simulation/seed-dispatch-simulation.mjs --revert   # 还原
+```
+
+必须走 `dotenv-cli`：`DATABASE_URL` 的密码含 `$`，`source` 与 dotenv-expand 都会静默吃掉后半段，表现为「密码错误」（规则 16）。
+
+`PENDING_COUNT = 20` 进 Allocation 队列，`PROCESSING_COUNT = 10` 进 Export Labels 队列，后者按 `PROCESSING_METHODS` 铺开以覆盖自印 PDF / MyPost CSV / eParcel CSV 三个通道。**Aramex 不在样本里**（2026-08-29 用户决定）：那张卡片会对这些客户的真实地址下真实的、不可幂等的、要计费的单（规则 24），模拟环境不能让那个按钮是活的。
+
+**它改的是真实的历史已完成订单，原值不在版本控制里。** 这 30 张订单的 `status` 本身是真实记录，`--apply` 前会把原值写进 `scripts/simulation/snapshot.json`，而该文件在 `.gitignore` 里——**它是唯一的还原依据，丢了这 30 张就回不去了**。动数据前先把它备份到项目外。`--apply` 在快照存在时会拒绝执行，否则第二次 apply 会把模拟值当成原值记录下来、真实状态就无声无息地没了。
+
+`--revert` 只恢复 6 列（`status` / `shipping_method` / `address_verified_at` / `address_verified_by` / `postage_paid`）。`order_logs` 的审计行**不删**——审计表只能追加（规则 22），所以这些真实订单上会永久留下一点模拟操作的痕迹。已知，接受。
+
+有了真实订单来源之后，整个 `scripts/simulation/` 应当删除；它存在的唯一理由就是顶替那个还不存在的入口。
+
+> **队列里有多少单，查库，不要读本文档。** §9.2 写于 2026-08-29 05:09，当时 `pending` 确实只有 205977 一张；而 `--apply` 是当天 15:09 才跑的，此处没有回头更新，于是 2026-11-08 有人照着那句话判断队列、把 21 张说成了 1 张。2026-11-08 的实际状态是：21 张 `pending` 全部在 Postage 队列（`address_verified_at` 全非空，Address 队列为 0），且**全部已有报价与 `is_selected`**，因此可以直接 Approve 而不必先跑 Quote all。
+
 ## 10. 未验证 / 未决
 
 | 项 | 说明 |
 |---|---|
-| **浏览器交互** | 三个页面都没人工点过。移动端 + 桌面端各一遍（规则 12） |
+| **浏览器交互** | 三个页面都没人工点过，§8.1 的订单弹窗同样没点过（上一张 / 下一张导航、按需加载的明细、Approve 的确认框都只过了编译与单测）。移动端 + 桌面端各一遍（规则 12） |
 | **Places 实际联想** | key 与端点验证过，但组件在浏览器里没跑过 |
 | ~~**`batch-postage-check` 实跑**~~ | **2026-08-29 跑通**，见 §9.2 |
 | **新 Task 必须先 deploy** | `trigger.dev dev` 在 staging key 下**不接管 run**——2026-08-29 实测两次触发都停在 `PENDING_VERSION`，直到 `deploy` 之后才跑起来。详见 [current_tasks.md](current_tasks.md) 表头。**环境变量不是障碍，早就配好了** |
 | **Places key 的 referrer 限制** | 见 §7.1，未做 |
-| **上游没有订单来源** | 全库 `pending` 只有 1 张。真正的入口是 eBay / Shopify 订单同步（`docs/orders-ui.md` §13 列为上线前硬阻塞），尚未开工。在那之前这个功能基本空转 |
+| **上游没有订单来源** | 真正的入口是 eBay / Shopify 订单同步（`docs/orders-ui.md` §13 列为上线前硬阻塞），尚未开工。在那之前队列里只有 §9.3 的 seed 脚本放进去的模拟单 |
 | **地址改动不会撤销已有的验证** | 客户地址是共享的，某张订单验证过之后客户地址又被改动，`address_verified_at` 不会重置。已知，接受 |

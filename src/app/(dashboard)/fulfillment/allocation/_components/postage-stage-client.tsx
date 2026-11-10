@@ -3,14 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  CheckCircle2,
-  Loader2,
-  RefreshCw,
-} from "lucide-react"
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { useConfirm } from "@/components/providers/confirm-provider"
 import { useBatchRunPoll } from "@/hooks/use-batch-run-poll"
 import {
   approveQuotedOrder,
@@ -37,13 +31,14 @@ import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { formatDate, formatMoney, formatWeightKg } from "@/lib/format"
 import type { BatchPostageCheckResult } from "@/trigger/batch-postage-check"
-import { cn } from "@/lib/utils"
 
 import { ManualApprovalDialog } from "./manual-approval-dialog"
+import { Margin, PostageOrderDialog } from "./postage-order-dialog"
 
 export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) {
   const router = useRouter()
-  const [expanded, setExpanded] = React.useState<number | null>(null)
+  const confirm = useConfirm()
+  const [openOrderId, setOpenOrderId] = React.useState<number | null>(null)
   const [approvingQuote, setApprovingQuote] = React.useState<number | null>(null)
   const [requoting, setRequoting] = React.useState<number | null>(null)
   const [manualOrder, setManualOrder] = React.useState<PostageStageOrder | null>(null)
@@ -62,6 +57,12 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
   })
 
   const busy = isStarting || running
+
+  // Resolved from the list rather than held as its own copy of the order, so a
+  // router.refresh() behind the dialog shows the new rates instead of the ones
+  // that were on screen when it opened.
+  const openIndex = orders.findIndex((order) => order.id === openOrderId)
+  const openOrder = openIndex >= 0 ? orders[openIndex] : null
 
   function handleRunBatch() {
     startBatch(async () => {
@@ -94,6 +95,17 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
   }
 
   async function handleApprove(order: PostageStageOrder, quote: ShippingQuoteRow) {
+    // Rule 9, via the shared hook rather than a dialog of its own. Approving is
+    // one-way: the order leaves this queue for `processing` and only a hand-
+    // written UPDATE brings it back, so the carrier and the price are repeated
+    // here to be read before it goes.
+    const ok = await confirm({
+      title: `Approve ${order.invoice_number}?`,
+      description: `${SHIPPING_METHOD_LABELS[quote.shipping_method]} at ${formatMoney(quote.quoted_rate)} with ${quote.carrier_name}. The order moves to Processing and appears on Export Labels; it cannot be sent back from here.`,
+      confirmText: "Approve",
+    })
+    if (!ok) return
+
     setApprovingQuote(quote.id)
     const result = await approveQuotedOrder(order.id, quote.id)
     setApprovingQuote(null)
@@ -106,6 +118,8 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
       description: `${SHIPPING_METHOD_LABELS[quote.shipping_method]} at ${formatMoney(quote.quoted_rate)} — now in Processing.`,
     })
     if (result.data?.warning) toast.warning(result.data.warning)
+    // The order has left the queue, so there is nothing left to look at.
+    setOpenOrderId(null)
     router.refresh()
   }
 
@@ -179,328 +193,182 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-8" />
-                <TableHead>Invoice</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Destination</TableHead>
-                <TableHead className="text-right">Goods</TableHead>
-                <TableHead className="text-right">Weight</TableHead>
-                <TableHead className="text-right">Received</TableHead>
-                <TableHead className="text-right">Cheapest</TableHead>
-                <TableHead className="w-32" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orders.map((order) => (
-                <OrderRows
-                  key={order.id}
-                  order={order}
-                  expanded={expanded === order.id}
-                  onToggle={() =>
-                    setExpanded((current) => (current === order.id ? null : order.id))
-                  }
-                  approvingQuote={approvingQuote}
-                  requoting={requoting === order.id}
-                  disabled={busy}
-                  onApprove={(quote) => void handleApprove(order, quote)}
-                  onRequote={() => void handleRequote(order)}
-                  onManual={() => setManualOrder(order)}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          <p className="text-xs text-muted-foreground">
+            Select an order to see what is in it, where it is going and every
+            rate it was quoted.
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Invoice</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Destination</TableHead>
+                  <TableHead className="text-right">Goods</TableHead>
+                  <TableHead className="text-right">Chargeable</TableHead>
+                  <TableHead className="text-right">Received</TableHead>
+                  <TableHead className="text-right">Cheapest</TableHead>
+                  <TableHead className="w-24" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {orders.map((order) => (
+                  <OrderRow
+                    key={order.id}
+                    order={order}
+                    onOpen={() => setOpenOrderId(order.id)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
       )}
+
+      <PostageOrderDialog
+        order={openOrder}
+        position={openIndex + 1}
+        total={orders.length}
+        onNavigate={(step) => {
+          const next = orders[openIndex + step]
+          if (next) setOpenOrderId(next.id)
+        }}
+        approvingQuote={approvingQuote}
+        requoting={openOrder !== null && requoting === openOrder.id}
+        disabled={busy}
+        onApprove={(quote) => {
+          if (openOrder) void handleApprove(openOrder, quote)
+        }}
+        onRequote={() => {
+          if (openOrder) void handleRequote(openOrder)
+        }}
+        onManual={() => {
+          if (openOrder) setManualOrder(openOrder)
+        }}
+        onOpenChange={(open) => !open && setOpenOrderId(null)}
+      />
 
       <ManualApprovalDialog
         order={manualOrder}
-        onOpenChange={(open) => !open && setManualOrder(null)}
+        onOpenChange={(open) => {
+          if (!open) setManualOrder(null)
+        }}
       />
     </div>
   )
 }
 
-function OrderRows({
+/**
+ * One line in the queue: enough to triage, not enough to decide.
+ *
+ * The figures that settle the choice -- packed size, whether that size is
+ * measured, what is actually in the box, the full address -- are in the dialog.
+ * Putting them here would mean a dozen columns, and the weight shown is the
+ * chargeable one because that is what the carrier bills.
+ */
+function OrderRow({
   order,
-  expanded,
-  onToggle,
-  approvingQuote,
-  requoting,
-  disabled,
-  onApprove,
-  onRequote,
-  onManual,
+  onOpen,
 }: {
   order: PostageStageOrder
-  expanded: boolean
-  onToggle: () => void
-  approvingQuote: number | null
-  requoting: boolean
-  disabled: boolean
-  onApprove: (quote: ShippingQuoteRow) => void
-  onRequote: () => void
-  onManual: () => void
+  onOpen: () => void
 }) {
   const priced = order.quotes.filter((quote) => !quote.error_message && quote.quoted_rate > 0)
-  const failed = order.quotes.filter((quote) => quote.error_message || quote.quoted_rate <= 0)
   const cheapest = priced.length > 0 ? Math.min(...priced.map((q) => q.quoted_rate)) : null
   const customer = order.customer
+  const metrics = order.metrics
+
+  // Hoisted out of the dialog: 28% of products have no measured dimensions and
+  // 313 order lines resolve to no product, so an order whose numbers cannot be
+  // trusted has to say so where the numbers are read, not one click away.
+  const caveats = metrics
+    ? [
+        metrics.has_estimated_dimensions ? "Size is estimated" : null,
+        metrics.unresolved_item_count > 0
+          ? `${metrics.unresolved_item_count} unresolved line${metrics.unresolved_item_count === 1 ? "" : "s"} — weight understated`
+          : null,
+      ].filter((note): note is string => note !== null)
+    : []
 
   return (
-    <>
-      <TableRow
-        className="cursor-pointer"
-        onClick={onToggle}
-        aria-expanded={expanded}
-      >
-        <TableCell>
-          {expanded ? (
-            <ChevronDown className="size-4 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="size-4 text-muted-foreground" />
-          )}
-        </TableCell>
-        <TableCell>
-          <Link
-            href={`/orders/${order.id}`}
-            onClick={(event) => event.stopPropagation()}
-            className="font-medium underline-offset-4 hover:underline"
-          >
-            {order.invoice_number}
-          </Link>
-          <div className="mt-0.5 flex items-center gap-1.5">
-            <Badge variant="secondary">{SALES_PLATFORM_LABELS[order.platform]}</Badge>
-          </div>
-        </TableCell>
-        <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
-          {formatDate(order.posted_on_date ?? order.created_at)}
-        </TableCell>
-        <TableCell className="text-sm">
-          {customer?.city?.trim() || "—"}{" "}
-          <span className="text-muted-foreground tabular-nums">
-            {customer?.state ?? ""} {customer?.postcode ?? ""}
-          </span>
-        </TableCell>
-        <TableCell className="text-right text-sm tabular-nums">
-          {formatMoney(order.metrics?.goods_total ?? null)}
-        </TableCell>
-        <TableCell className="text-right text-sm tabular-nums">
-          {order.metrics ? (
-            formatWeightKg(order.metrics.total_weight_kg)
-          ) : (
-            <span className="text-warning-foreground">No metrics</span>
-          )}
-        </TableCell>
-        <TableCell className="text-right text-sm tabular-nums">
-          {formatMoney(order.postage_and_handling)}
-        </TableCell>
-        <TableCell className="text-right text-sm font-medium tabular-nums">
-          {cheapest === null ? (
-            <span className="text-muted-foreground">
-              {order.quotes.length === 0 ? "Not quoted" : "No price"}
-            </span>
-          ) : (
-            <Margin rate={cheapest} received={order.postage_and_handling} />
-          )}
-        </TableCell>
-        <TableCell className="text-right">
-          <span className="text-xs text-muted-foreground">
-            {priced.length > 0
-              ? `${priced.length} option${priced.length === 1 ? "" : "s"}`
-              : ""}
-          </span>
-        </TableCell>
-      </TableRow>
-
-      {expanded ? (
-        <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={9} className="bg-muted/30 p-4">
-            <div className="flex flex-col gap-3">
-              {order.metrics === null ? (
-                <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
-                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                  This order has no row in order_metrics_summary, so it has no
-                  weight or size to quote against. Quoting it will fail until the
-                  metrics are rebuilt from the order page.
-                </p>
-              ) : null}
-
-              {order.quotes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No rates yet. Use <strong>Quote all</strong> above, or re-quote
-                  just this order.
-                </p>
-              ) : (
-                <QuoteTable
-                  quotes={priced}
-                  failed={failed}
-                  cheapest={cheapest}
-                  received={order.postage_and_handling}
-                  approvingQuote={approvingQuote}
-                  disabled={disabled}
-                  onApprove={onApprove}
-                />
-              )}
-
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={disabled || requoting}
-                  onClick={onRequote}
-                >
-                  {requoting ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3.5" />
-                  )}
-                  Re-quote this order
-                </Button>
-                <Button size="sm" variant="outline" disabled={disabled} onClick={onManual}>
-                  Approve without a quote
-                </Button>
-              </div>
-            </div>
-          </TableCell>
-        </TableRow>
-      ) : null}
-    </>
-  )
-}
-
-function QuoteTable({
-  quotes,
-  failed,
-  cheapest,
-  received,
-  approvingQuote,
-  disabled,
-  onApprove,
-}: {
-  quotes: ShippingQuoteRow[]
-  failed: ShippingQuoteRow[]
-  cheapest: number | null
-  received: number
-  approvingQuote: number | null
-  disabled: boolean
-  onApprove: (quote: ShippingQuoteRow) => void
-}) {
-  return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-background">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Method</TableHead>
-            <TableHead>Carrier</TableHead>
-            <TableHead>Zone</TableHead>
-            <TableHead className="text-right">Rate</TableHead>
-            <TableHead className="text-right">vs received</TableHead>
-            <TableHead className="w-28" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {quotes.map((quote) => (
-            <TableRow key={quote.id}>
-              <TableCell className="text-sm font-medium whitespace-nowrap">
-                {SHIPPING_METHOD_LABELS[quote.shipping_method]}
-                {/* A hint, not a default. The operator picks; nothing here is
-                    pre-selected and no row is hidden for being expensive. */}
-                {cheapest !== null && quote.quoted_rate === cheapest ? (
-                  <Badge variant="info" className="ml-2">
-                    Cheapest
-                  </Badge>
-                ) : null}
-                {quote.is_selected ? (
-                  <Badge variant="secondary" className="ml-2">
-                    Engine pick
-                  </Badge>
-                ) : null}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {quote.carrier_name}
-              </TableCell>
-              <TableCell className="text-sm">{quote.zone ?? "—"}</TableCell>
-              <TableCell className="text-right text-sm font-medium tabular-nums">
-                {formatMoney(quote.quoted_rate)}
-              </TableCell>
-              <TableCell className="text-right text-sm tabular-nums">
-                <Margin rate={quote.quoted_rate} received={received} showRate={false} />
-              </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  disabled={disabled || approvingQuote !== null}
-                  onClick={() => onApprove(quote)}
-                >
-                  {approvingQuote === quote.id ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : null}
-                  Approve
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-
-          {/* Kept rather than hidden. A flat-rate group where nothing fits
-              reports its reason on every size, and dropping those rows would
-              silently shorten the list with no explanation given. */}
-          {failed.map((quote) => (
-            <TableRow key={quote.id} className="opacity-60">
-              <TableCell className="text-sm whitespace-nowrap">
-                {SHIPPING_METHOD_LABELS[quote.shipping_method]}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {quote.carrier_name}
-              </TableCell>
-              <TableCell colSpan={4} className="text-xs text-muted-foreground">
-                {quote.error_message ?? "No price returned"}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-/**
- * The rate, and what it does to this order's postage.
- *
- * Colour only reports; it never filters. A rate above what the customer paid is
- * a loss on the postage line, which is normal on some orders and a mistake on
- * others -- that judgement is the operator's, which is the whole reason this
- * screen exists.
- */
-function Margin({
-  rate,
-  received,
-  showRate = true,
-}: {
-  rate: number
-  received: number
-  showRate?: boolean
-}) {
-  const delta = received - rate
-  const over = delta < 0
-
-  return (
-    <span
-      className={cn(
-        "tabular-nums",
-        over ? "text-warning-foreground" : "text-success-foreground"
-      )}
+    <TableRow
+      className="cursor-pointer"
+      onClick={onOpen}
+      // Clickable rows are not reachable by keyboard on their own, and this row
+      // is now the only way into the order.
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
     >
-      {showRate ? `${formatMoney(rate)} ` : ""}
-      <span className="text-xs">
-        ({over ? "−" : "+"}
-        {formatMoney(Math.abs(delta))})
-      </span>
-    </span>
+      <TableCell>
+        <Link
+          href={`/orders/${order.id}`}
+          onClick={(event) => event.stopPropagation()}
+          className="font-medium underline-offset-4 hover:underline"
+        >
+          {order.invoice_number}
+        </Link>
+        <div className="mt-0.5 flex items-center gap-1.5">
+          <Badge variant="secondary">{SALES_PLATFORM_LABELS[order.platform]}</Badge>
+        </div>
+      </TableCell>
+      <TableCell className="text-sm whitespace-nowrap text-muted-foreground">
+        {formatDate(order.posted_on_date ?? order.created_at)}
+      </TableCell>
+      <TableCell className="text-sm">
+        {customer?.city?.trim() || "—"}{" "}
+        <span className="text-muted-foreground tabular-nums">
+          {customer?.state ?? ""} {customer?.postcode ?? ""}
+        </span>
+      </TableCell>
+      <TableCell className="text-right text-sm tabular-nums">
+        {formatMoney(metrics?.goods_total ?? null)}
+      </TableCell>
+      <TableCell className="text-right text-sm tabular-nums">
+        {metrics ? (
+          <span className="inline-flex items-center gap-1.5">
+            {caveats.length > 0 ? (
+              <span title={caveats.join(" · ")} className="inline-flex">
+                <AlertTriangle className="size-3.5 shrink-0 text-warning-foreground" />
+                <span className="sr-only">{caveats.join(". ")}</span>
+              </span>
+            ) : null}
+            {formatWeightKg(metrics.chargeable_weight_kg)}
+          </span>
+        ) : (
+          <span
+            className="text-warning-foreground"
+            title="No row in order_metrics_summary — quoting fails until the metrics are rebuilt."
+          >
+            No metrics
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="text-right text-sm tabular-nums">
+        {formatMoney(order.postage_and_handling)}
+      </TableCell>
+      <TableCell className="text-right text-sm font-medium tabular-nums">
+        {cheapest === null ? (
+          <span className="text-muted-foreground">
+            {order.quotes.length === 0 ? "Not quoted" : "No price"}
+          </span>
+        ) : (
+          <Margin rate={cheapest} received={order.postage_and_handling} />
+        )}
+      </TableCell>
+      <TableCell className="text-right">
+        <span className="text-xs text-muted-foreground">
+          {priced.length > 0
+            ? `${priced.length} option${priced.length === 1 ? "" : "s"}`
+            : ""}
+        </span>
+      </TableCell>
+    </TableRow>
   )
 }
 

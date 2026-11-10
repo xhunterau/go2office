@@ -74,6 +74,31 @@ export type AllocationMetrics = {
   chargeable_weight_kg: number
   goods_total: number
   max_dimension_mm: number | null
+  /**
+   * The packing estimate the quote was priced against: max(L) x max(W) x sum(H)
+   * across the lines. Deliberately pessimistic -- it never lets a small item
+   * ride inside a big item's box -- so it is what the carrier was asked about,
+   * not what will be declared when the label is bought (that is dominant_*,
+   * CLAUDE.md rule 24).
+   */
+  packed_length_mm: number | null
+  packed_width_mm: number | null
+  packed_height_mm: number | null
+  total_items: number
+  /**
+   * True when any line's product has a zero dimension and fell back to the 10mm
+   * default. 864 of 3123 products (28%) are in that state, so the packed size
+   * above is a guess on roughly a third of orders and the UI has to say so
+   * rather than print it like a measurement.
+   */
+  has_estimated_dimensions: boolean
+  /**
+   * Lines that resolved to no product. They carry a quantity but contribute no
+   * weight, size or cost, so every physical metric on this order is understated
+   * by an unknown amount -- which is exactly the situation where a quote should
+   * not be trusted without a look.
+   */
+  unresolved_item_count: number
 }
 
 export type PostageStageOrder = AllocationOrder & {
@@ -105,7 +130,7 @@ const ORDER_SELECT =
   "id, invoice_number, platform, shipping_method, postage_and_handling, posted_on_date, created_at, customers!inner (id, full_name, company_name, email, phone, address_line1, address_line2, address_line3, address_line4, city, state, postcode, country)" as const
 
 const METRICS_COLUMNS =
-  "order_id, total_weight_kg, chargeable_weight_kg, goods_total, max_dimension_mm" as const
+  "order_id, total_weight_kg, chargeable_weight_kg, goods_total, max_dimension_mm, packed_length_mm, packed_width_mm, packed_height_mm, total_items, has_estimated_dimensions, unresolved_item_count" as const
 
 type RawOrder = {
   id: number
@@ -319,6 +344,12 @@ async function fetchMetricsFor(
           chargeable_weight_kg: Number(row.chargeable_weight_kg),
           goods_total: Number(row.goods_total),
           max_dimension_mm: row.max_dimension_mm,
+          packed_length_mm: row.packed_length_mm,
+          packed_width_mm: row.packed_width_mm,
+          packed_height_mm: row.packed_height_mm,
+          total_items: Number(row.total_items),
+          has_estimated_dimensions: row.has_estimated_dimensions,
+          unresolved_item_count: Number(row.unresolved_item_count),
         } satisfies AllocationMetrics,
       ])
     ),

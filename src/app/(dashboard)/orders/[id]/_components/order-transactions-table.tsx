@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
-  ImageOff,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -17,6 +16,8 @@ import { toast } from "sonner"
 
 import type { OrderPickedItem, OrderTransaction } from "@/lib/queries/orders"
 import { deleteOrderTransaction } from "@/lib/actions/order"
+import { shortenItemTitle } from "@/lib/orders/item-title"
+import { ProductThumb } from "@/components/products/product-thumb"
 import { formatMoney } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/components/providers/confirm-provider"
@@ -171,8 +172,13 @@ export function OrderTransactionsTable({
                       </TableCell>
                       <TableCell className="max-w-md">
                         <div className="flex items-center gap-2">
-                          <span className="truncate">
-                            {transaction.item_title ?? "—"}
+                          {/* Clipped in the middle rather than by CSS: 62% of
+                              these titles carry their variant in trailing
+                              brackets, and `truncate` drops exactly that --
+                              four Beston battery lines then read identically
+                              (lib/orders/item-title.ts). */}
+                          <span title={transaction.item_title ?? undefined}>
+                            {shortenItemTitle(transaction.item_title) || "—"}
                           </span>
                           {/* On the parent row, not only inside the expansion:
                               everything is collapsed by default, so marking it
@@ -379,27 +385,3 @@ function PickedItems({ items }: { items: OrderPickedItem[] }) {
 // live in one place. Same single placeholder as everywhere else in the app: an
 // unresolved SKU and a product without a photo are not worth two different
 // pictures.
-function ProductThumb({
-  src,
-  alt,
-}: {
-  src: string | null
-  alt: string | null
-}) {
-  if (!src) {
-    return (
-      <div className="flex size-10 items-center justify-center rounded-md bg-muted text-muted-foreground">
-        <ImageOff className="size-4" />
-      </div>
-    )
-  }
-
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={alt ?? "Product"}
-      className="size-10 rounded-md object-cover"
-    />
-  )
-}

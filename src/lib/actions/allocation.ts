@@ -15,6 +15,10 @@ import {
   countPostageQueue,
 } from "@/lib/queries/allocation"
 import {
+  fetchOrderTransactionsWithItems,
+  type OrderTransaction,
+} from "@/lib/queries/orders"
+import {
   normalizeLocality,
   normalizePostcode,
 } from "@/lib/shipping/adapters/zone-resolver"
@@ -376,6 +380,28 @@ export async function getPostageCheckStatus(
           : "Could not read the postage check status",
     }
   }
+}
+
+/**
+ * What is actually in one order, fetched when its dialog opens.
+ *
+ * Deliberately not part of fetchPostageStageOrders: the queue renders a row per
+ * order and only one dialog is open at a time, so pulling transactions and
+ * picked items for the whole queue up front would be two extra hops per order
+ * thrown away. Mirrors loadLatestShippingQuotes, which lazy-loads for the same
+ * reason.
+ */
+export async function loadOrderContents(
+  orderId: number
+): Promise<ActionResult<OrderTransaction[]>> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+
+  const supabase = await createClient()
+  const { transactions, error } = await fetchOrderTransactionsWithItems(supabase, orderId)
+  if (error) return { success: false, error }
+  return { success: true, data: transactions }
 }
 
 export type ApprovalResult = { warning?: string }
