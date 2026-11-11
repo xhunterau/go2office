@@ -18,10 +18,12 @@ import {
   productCreateSchema,
   productSectionSchemas,
   retailPriceSchema,
+  productsLogisticsUpdateSchema,
   DEFAULT_DIMENSION,
   type ProductCreateInput,
   type ProductSection,
 } from "@/lib/validations/product"
+import { ALLOCATION_STATUS } from "@/lib/queries/allocation"
 import {
   PRODUCT_IMAGES_BUCKET,
   objectPathFromPublicUrl,
@@ -319,4 +321,148 @@ export async function searchOrderLineProductsAction(
 
   if (error) return { success: false, error }
   return { success: true, data: products }
+}
+
+export type ProductLogistics = {
+  id: number
+  sku: string
+  name: string | null
+  is_kit: boolean
+  weight: number
+  length: number
+  width: number
+  height: number
+}
+
+// Current weight and dimensions for the Postage dialog's edit form. Read when
+// the form opens rather than carried from the page, so the values typed over
+// are the ones in the database now, not the ones the queue was rendered with.
+export async function loadProductsLogistics(
+  ids: number[]
+): Promise<ActionResult<ProductLogistics[]>> {
+  const unique = [...new Set(ids)].filter((id) => Number.isInteger(id) && id > 0)
+  if (unique.length === 0) return { success: false, error: "No products to load" }
+  if (unique.length > 50) return { success: false, error: "Too many products" }
+
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from("products")
+    .select("id, sku, name, is_kit, weight, length, width, height")
+    .in("id", unique)
+    .order("sku", { ascending: true })
+
+  if (error) return { success: false, error: error.message }
+  return { success: true, data: data ?? [] }
+}
+
+// Above this many affected queue orders the rest are left to the hourly
+// refresh_stale_order_metrics job, which picks them up by products.updated_at
+// anyway. Each rebuild is one RPC, and the save should not stall on a
+// product that happens to sit in half the queue.
+const MAX_QUEUE_REBUILDS = 100
+
+/**
+ * Write weight and dimensions for a handful of products, then bring the
+ * affected orders' packed figures up to date.
+ *
+ * The second half is the point. order_metrics_summary has no trigger on
+ * products -- only on orders, order_transactions and order_items -- so without
+ * it the operator fixes a size and the dialog keeps showing the old packed
+ * size until the hourly job runs. Rebuilt: the order the edit was made from,
+ * plus every other order in the Postage queue that picks the same product.
+ *
+ * Quotes are NOT re-run. They hit carrier APIs and are a record of what was
+ * offered (CLAUDE.md rule 23); the caller tells the operator to re-quote.
+ *
+ * Kits are refused: their weight and size are derived from the components, and
+ * order metrics are built from the picked components, so a number written on
+ * the kit row would change nothing that is shown.
+ */
+export async function updateProductsLogistics(
+  orderId: number,
+  input: unknown
+): Promise<ActionResult<{ rebuiltOrders: number }>> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+
+  const parsed = productsLogisticsUpdateSchema.safeParse(input)
+  if (!parsed.success) {
+    return {
+      success: false,
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
+    }
+  }
+
+  const supabase = await createClient()
+  const ids = parsed.data.map((row) => row.id)
+
+  const { data: kits, error: kitError } = await supabase
+    .from("products")
+    .select("sku")
+    .in("id", ids)
+    .eq("is_kit", true)
+  if (kitError) return { success: false, error: kitError.message }
+  if (kits && kits.length > 0) {
+    return {
+      success: false,
+      error: `${kits.map((k) => k.sku).join(", ")} is a kit; edit its components instead.`,
+    }
+  }
+
+  // Sequential, one row each: every product gets its own values, and a row
+  // that comes back empty (deleted, or refused by RLS -- rule 22) has to be
+  // reported rather than toasted as saved.
+  for (const { id, ...values } of parsed.data) {
+    const { data: updated, error } = await supabase
+      .from("products")
+      .update(values)
+      .eq("id", id)
+      .select("id")
+      .maybeSingle()
+
+    if (error) return { success: false, error: error.message }
+    if (!updated) return { success: false, error: `Product ${id} not found` }
+  }
+
+  // Every queue order that picks one of these products, this one included.
+  const { data: affected, error: affectedError } = await supabase
+    .from("order_items")
+    .select("order_transactions!inner(order_id, orders!inner(status))")
+    .in("product_id", ids)
+    .eq("order_transactions.orders.status", ALLOCATION_STATUS)
+
+  const orderIds = new Set<number>([orderId])
+  if (!affectedError) {
+    for (const row of affected ?? []) {
+      orderIds.add(row.order_transactions.order_id)
+    }
+  }
+
+  let rebuiltOrders = 0
+  let rebuildError: string | null = null
+  for (const id of [...orderIds].slice(0, MAX_QUEUE_REBUILDS)) {
+    const { error } = await supabase.rpc("rebuild_order_metrics", { p_order_id: id })
+    if (error) {
+      rebuildError = error.message
+      if (id === orderId) break
+      continue
+    }
+    rebuiltOrders += 1
+  }
+
+  revalidatePath(PATH)
+  for (const id of ids) revalidatePath(`${PATH}/${id}`)
+  revalidatePath("/fulfillment/allocation")
+
+  // The products are saved either way; a failed rebuild only means the packed
+  // size catches up on the next hourly refresh, so it is not a failure.
+  if (rebuildError && rebuiltOrders === 0) {
+    return {
+      success: true,
+      data: { rebuiltOrders },
+      error: `Saved, but the order figures were not recalculated: ${rebuildError}`,
+    }
+  }
+  return { success: true, data: { rebuiltOrders } }
 }

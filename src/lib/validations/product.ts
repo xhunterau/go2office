@@ -268,3 +268,51 @@ export const BOOLEAN_FIELDS = new Set<ProductFieldKey>([
   "is_active",
   "is_kit",
 ])
+
+// ---------------------------------------------------------------------------
+// Logistics — weight and dimensions, edited on their own from Order Allocation
+//
+// The Postage dialog lets the operator fix a product whose packed size is
+// obviously wrong without leaving the queue. Only these four columns: routing
+// the edit through the `commercial` section would also rewrite the prices from
+// whatever the dialog happened to load. Required, like the commercial section,
+// because the columns are NOT NULL.
+// ---------------------------------------------------------------------------
+
+export const PRODUCT_LOGISTICS_FIELDS = [
+  "weight",
+  "length",
+  "width",
+  "height",
+] as const satisfies readonly ProductFieldKey[]
+
+export const productLogisticsSchema = pickSchema(
+  commercialServerFields,
+  PRODUCT_LOGISTICS_FIELDS
+)
+export type ProductLogisticsInput = z.infer<typeof productLogisticsSchema>
+
+export const productLogisticsFormSchema = pickSchema(
+  commercialFormFields,
+  PRODUCT_LOGISTICS_FIELDS
+)
+
+// One row per product in the edit dialog. The id rides along as a number: it
+// is never typed by the user, only carried from the row that was loaded.
+export const productsLogisticsFormSchema = z.object({
+  products: z
+    .array(
+      productLogisticsFormSchema.extend({
+        id: z.number().int().positive(),
+      })
+    )
+    .min(1),
+})
+export type ProductsLogisticsFormValues = z.infer<
+  typeof productsLogisticsFormSchema
+>
+
+export const productsLogisticsUpdateSchema = z
+  .array(productLogisticsSchema.extend({ id: z.coerce.number().int().positive() }))
+  .min(1, "Nothing to save")
+  .max(50, "Too many products")

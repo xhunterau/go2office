@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import {
   AlertTriangle,
   ChevronLeft,
@@ -12,6 +13,7 @@ import {
   Package,
   Phone,
   RefreshCw,
+  Ruler,
 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
@@ -31,6 +33,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ProductThumb } from "@/components/products/product-thumb"
 import { loadOrderContents } from "@/lib/actions/allocation"
 import type { PostageStageOrder } from "@/lib/queries/allocation"
@@ -58,6 +65,8 @@ import {
   formatWeightKg,
 } from "@/lib/format"
 import { cn } from "@/lib/utils"
+
+import { ProductLogisticsDialog } from "./product-logistics-dialog"
 
 /**
  * One order in the Postage queue, in full, with its rates.
@@ -200,6 +209,7 @@ export function PostageOrderDialog({
 
             <div className="lg:col-span-2">
               <Contents
+                orderId={order.id}
                 transactions={current?.transactions ?? null}
                 loading={current === null}
                 error={current?.error ?? null}
@@ -428,15 +438,37 @@ function Figure({
   )
 }
 
+/**
+ * The products a line actually picks, which is what the packed size is built
+ * from: the product itself for a plain listing, the components for a kit.
+ */
+function pickedProductIds(transaction: OrderTransaction): number[] {
+  return [
+    ...new Set(
+      transaction.items
+        .map((item) => item.product_id)
+        .filter((id): id is number => id !== null)
+    ),
+  ]
+}
+
 function Contents({
+  orderId,
   transactions,
   loading,
   error,
 }: {
+  orderId: number
   transactions: OrderTransaction[] | null
   loading: boolean
   error: string | null
 }) {
+  const router = useRouter()
+  const [editing, setEditing] = React.useState<{
+    productIds: number[]
+    title: string
+  } | null>(null)
+
   return (
     <section className="flex flex-col gap-2">
       <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -468,6 +500,7 @@ function Contents({
                 <TableHead className="w-32">SKU</TableHead>
                 <TableHead className="w-12 text-right">Qty</TableHead>
                 <TableHead className="w-20 text-right">Price</TableHead>
+                <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -501,7 +534,22 @@ function Contents({
                     ) : null}
                   </TableCell>
                   <TableCell className="font-mono text-xs break-all text-muted-foreground">
-                    {transaction.custom_label?.trim() || "—"}
+                    {/* New tab: the operator is mid-queue, and following the
+                        link in place would throw away the dialog and its
+                        position. */}
+                    {transaction.product_id !== null && transaction.custom_label ? (
+                      <Link
+                        href={`/products/${transaction.product_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 underline-offset-4 hover:text-foreground hover:underline"
+                      >
+                        {transaction.custom_label.trim()}
+                        <ExternalLink className="size-3 shrink-0" />
+                      </Link>
+                    ) : (
+                      transaction.custom_label?.trim() || "—"
+                    )}
                   </TableCell>
                   <TableCell className="text-right text-sm tabular-nums">
                     {transaction.quantity}
@@ -509,13 +557,74 @@ function Contents({
                   <TableCell className="text-right text-sm tabular-nums">
                     {formatMoney(transaction.sale_price)}
                   </TableCell>
+                  <TableCell className="text-right">
+                    <EditSizeButton
+                      productIds={pickedProductIds(transaction)}
+                      onClick={(productIds) =>
+                        setEditing({
+                          productIds,
+                          title:
+                            transaction.item_title ??
+                            transaction.custom_label ??
+                            "Order line",
+                        })
+                      }
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </div>
       )}
+
+      <ProductLogisticsDialog
+        orderId={orderId}
+        productIds={editing?.productIds ?? null}
+        lineTitle={editing?.title ?? ""}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null)
+        }}
+        // Picks up the rebuilt order_metrics_summary row, so Weight & size
+        // shows the new packed figures without reopening the order.
+        onSaved={() => router.refresh()}
+      />
     </section>
+  )
+}
+
+function EditSizeButton({
+  productIds,
+  onClick,
+}: {
+  productIds: number[]
+  onClick: (productIds: number[]) => void
+}) {
+  const unresolved = productIds.length === 0
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* Wrapped so the tooltip still explains a disabled button. */}
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="size-7"
+            disabled={unresolved}
+            onClick={() => onClick(productIds)}
+            aria-label="Edit weight & size"
+          >
+            <Ruler className="size-3.5" />
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {unresolved
+          ? "No product resolved for this line"
+          : "Edit weight & size"}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

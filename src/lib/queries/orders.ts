@@ -590,6 +590,10 @@ export type OrderTransaction = {
   // showing one component's photo for a bundle is worse than showing none.
   // Null when the SKU matches no product, or when the product has no image.
   image_url: string | null
+  // The sold product itself, resolved from custom_label by the same lookup as
+  // image_url. Lets a line link to /products/[id]; null when the label matches
+  // no product.
+  product_id: number | null
 }
 
 // Both levels in one round trip. A kit expands into a handful of components
@@ -616,7 +620,7 @@ export async function fetchOrderTransactionsWithItems(
 
   type Raw = Omit<
     OrderTransaction,
-    "items" | "hasUnresolved" | "image_url"
+    "items" | "hasUnresolved" | "image_url" | "product_id"
   > & {
     order_items: {
       id: number
@@ -646,18 +650,21 @@ export async function fetchOrderTransactionsWithItems(
     ),
   ]
 
-  const imageBySku = new Map<string, string | null>()
+  const productBySku = new Map<string, { id: number; image_url: string | null }>()
   if (labels.length > 0) {
     const { data: products, error: productsError } = await supabase
       .from("products")
-      .select("sku, image_url")
+      .select("id, sku, image_url")
       .in("sku", labels)
 
     // A failed thumbnail lookup costs the expansion its pictures, not its
     // contents, so it is not raised to the caller as an error.
     if (!productsError) {
       for (const product of products ?? []) {
-        imageBySku.set(product.sku, product.image_url)
+        productBySku.set(product.sku, {
+          id: product.id,
+          image_url: product.image_url,
+        })
       }
     }
   }
@@ -691,7 +698,10 @@ export async function fetchOrderTransactionsWithItems(
       items,
       hasUnresolved: items.some((item) => item.product_id === null),
       image_url: t.custom_label
-        ? (imageBySku.get(t.custom_label) ?? null)
+        ? (productBySku.get(t.custom_label)?.image_url ?? null)
+        : null,
+      product_id: t.custom_label
+        ? (productBySku.get(t.custom_label)?.id ?? null)
         : null,
     }
   })

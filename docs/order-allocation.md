@@ -231,6 +231,16 @@ Wall Stickers Removable Art Vinyl Quote Decal Mural Home Room DIY Decor Windows[
 
 **订单详情页同步换用同一个函数**，否则同一条标题在两个页面显示不同。那里原先是 CSS `truncate`，有一样的丢变体问题。
 
+## 8.3 在弹窗里改商品重量与尺寸（2026-11-11）
+
+`What's in it` 每行末尾的尺子按钮打开 `product-logistics-dialog.tsx`，SKU 解析得到商品时可点开、在新标签页打开 `/products/[id]`。
+
+- **改的是拣货商品，不是售出商品**：packed size 由 `order_items`（实际拣货的组件）算出。普通商品两者相同；套装则列出各组件。套装自身的重量与尺寸由组件派生（`/products/[id]` 同样不让改），即使写进去也不影响任何显示，所以 `updateProductsLogistics` 直接拒绝 `is_kit` 商品。
+- **只写 `weight / length / width / height` 四列**：与 `updateProductRetailPrice` 同理，不走 `commercial` 段，避免用弹窗加载时的旧值覆盖价格。
+- **保存后必须手动重算 metrics**：`order_metrics_summary` 在 `products` 上**没有触发器**，不重算的话弹窗会一直显示旧的 packed size，直到每小时的 `refresh_stale_order_metrics`。action 对当前订单以及 Postage 队列中所有拣到这些商品的 `pending` 订单逐一调用 `rebuild_order_metrics`，上限 100 单，超出的由每小时作业兜底。重算失败不算保存失败：商品已写入，只附带一条 warning。
+- **不自动重新报价**（用户决策）：报价会调用承运商 API，且是「当时报了多少」的记录（规则 23）。toast 只提示 Re-quote。
+- 尺寸保存时会被 `products_normalize_fields` 重新排成 L ≥ W ≥ H（规则 19），弹窗里预先写明，免得用户误以为是 bug。
+
 ## 9. 远端验证
 
 ### 9.1 行为探测（2026-08-24）
