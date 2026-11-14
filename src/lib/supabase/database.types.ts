@@ -489,6 +489,35 @@ export type Database = {
         }
         Relationships: []
       }
+      // Runtime debug overrides, /settings/debug. Rows come from migrations;
+      // the UI may only change value, enabled and updated_by (column grants).
+      debug_settings: {
+        Row: {
+          key: string
+          value: string
+          enabled: boolean
+          description: string | null
+          updated_by: string | null
+          updated_at: string
+        }
+        Insert: {
+          key: string
+          value?: string
+          enabled?: boolean
+          description?: string | null
+          updated_by?: string | null
+          updated_at?: string
+        }
+        Update: {
+          key?: string
+          value?: string
+          enabled?: boolean
+          description?: string | null
+          updated_by?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       carriers: {
         Row: {
           id: number

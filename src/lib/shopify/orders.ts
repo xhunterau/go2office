@@ -118,25 +118,38 @@ type OrdersQueryResult = {
 }
 
 /**
- * Which orders to pull: everything not yet shipped, as xpros does, relying on
- * the duplicate check to make re-runs harmless. A test run narrows it to one
- * order by its name ("#G2B24707").
+ * A Shopify order id (legacyResourceId, what orders.web_order_id holds) is a
+ * 13-digit number today. Order names in this store carry a G2B prefix, but a
+ * store on Shopify's default naming has all-digit names too (#1001), so only a
+ * long run of digits is taken as an id; anything shorter is a name.
  */
-export function ordersFilter(testOrderName?: string): string {
-  if (testOrderName) {
-    const name = testOrderName.trim().replace(/"/g, "")
-    return `name:"${name.startsWith("#") ? name : `#${name}`}"`
-  }
-  return "fulfillment_status:unshipped"
+const ORDER_ID_PATTERN = /^\d{10,}$/
+
+/**
+ * Which orders to pull: everything not yet shipped, as xpros does, relying on
+ * the duplicate check to make re-runs harmless. A test run (the
+ * shopify_import_test_order debug setting) narrows it to one order, given
+ * either as its name ("#G2B24707", "G2B24707") or its numeric id
+ * ("7930453721225").
+ *
+ * xpros documents its switch as taking the legacyResourceId but searches
+ * `name:` with it, so the value its own description asks for matches nothing.
+ * Both forms work here.
+ */
+export function ordersFilter(testOrder?: string): string {
+  const value = testOrder?.trim().replace(/"/g, "")
+  if (!value) return "fulfillment_status:unshipped"
+  if (ORDER_ID_PATTERN.test(value)) return `id:${value}`
+  return `name:"${value.startsWith("#") ? value : `#${value}`}"`
 }
 
 export async function fetchShopifyOrdersPage(
   cursor: string | null,
-  testOrderName?: string
+  testOrder?: string
 ): Promise<{ orders: ShopifyOrder[]; hasNextPage: boolean; endCursor: string | null }> {
   const data = await shopifyQuery<OrdersQueryResult>(ORDERS_QUERY, {
     cursor,
-    queryFilter: ordersFilter(testOrderName),
+    queryFilter: ordersFilter(testOrder),
   })
 
   return {

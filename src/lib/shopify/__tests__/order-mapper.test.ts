@@ -186,4 +186,23 @@ describe("ordersFilter", () => {
     expect(ordersFilter("G2B24707")).toBe('name:"#G2B24707"')
     expect(ordersFilter("#G2B24707")).toBe('name:"#G2B24707"')
   })
+
+  it("searches a long run of digits as the order id, not the name", () => {
+    // What orders.web_order_id holds; xpros sent this to name: and found nothing.
+    expect(ordersFilter("7930453721225")).toBe("id:7930453721225")
+    expect(ordersFilter(" 7930453721225 ")).toBe("id:7930453721225")
+  })
+
+  it("keeps a short all-digit value as a name (#1001 on default naming)", () => {
+    expect(ordersFilter("1001")).toBe('name:"#1001"')
+  })
+
+  it("treats a blank value as no test order", () => {
+    expect(ordersFilter("")).toBe("fulfillment_status:unshipped")
+    expect(ordersFilter("   ")).toBe("fulfillment_status:unshipped")
+  })
+
+  it("cannot break out of the quoted name", () => {
+    expect(ordersFilter('G2B1" OR status:any')).toBe('name:"#G2B1 OR status:any"')
+  })
 })

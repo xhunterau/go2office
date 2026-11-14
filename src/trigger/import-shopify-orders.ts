@@ -10,10 +10,12 @@ export interface ImportShopifyOrdersPayload {
   /** Who pressed the button; written to order_logs.user_id. */
   userId?: string | null
   /**
-   * Import just this order ("#G2B24707"). Set from the Trigger.dev dashboard
-   * for a first run against production; the page never sends it.
+   * Import just this order: its name ("#G2B24707") or numeric id
+   * ("7930453721225"), see ordersFilter(). The page sends it while the
+   * shopify_import_test_order debug setting is on (/settings/debug); it can
+   * also be set by hand from the Trigger.dev dashboard.
    */
-  testOrderName?: string
+  testOrder?: string
 }
 
 export interface ShopifyImportFailure {
@@ -22,6 +24,8 @@ export interface ShopifyImportFailure {
 }
 
 export interface ImportShopifyOrdersResult {
+  /** The debug test order this run was narrowed to, or null for a full import. */
+  testOrder: string | null
   fetched: number
   /** New orders created. */
   imported: number
@@ -73,6 +77,8 @@ export const importShopifyOrdersTask = task({
       auth: { persistSession: false, autoRefreshToken: false },
     })
 
+    const testOrder = payload.testOrder?.trim() || null
+
     await metadata.set("stage", "fetching")
 
     // Fetch everything first, then write: a Shopify failure halfway through the
@@ -81,7 +87,7 @@ export const importShopifyOrdersTask = task({
     const orders: ShopifyOrder[] = []
     let cursor: string | null = null
     for (;;) {
-      const page = await fetchShopifyOrdersPage(cursor, payload.testOrderName)
+      const page = await fetchShopifyOrdersPage(cursor, testOrder ?? undefined)
       orders.push(...page.orders)
       if (!page.hasNextPage) break
       cursor = page.endCursor
@@ -89,13 +95,14 @@ export const importShopifyOrdersTask = task({
 
     logger.info("Fetched Shopify orders", {
       count: orders.length,
-      testOrderName: payload.testOrderName ?? null,
+      testOrder,
     })
 
     // Oldest first (the query sorts by CREATED_AT), so when two orders from one
     // customer arrive together the first one creates the order and the second
     // merges into it, matching the order they were placed in.
     const result: ImportShopifyOrdersResult = {
+      testOrder,
       fetched: orders.length,
       imported: 0,
       merged: 0,

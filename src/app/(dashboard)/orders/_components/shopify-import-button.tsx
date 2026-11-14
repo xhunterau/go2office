@@ -2,9 +2,12 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { AlertTriangle, CheckCircle2, Download, Loader2 } from "lucide-react"
+import { AlertTriangle, Bug, CheckCircle2, Download, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
+import Link from "next/link"
+
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -32,8 +35,13 @@ type Ending = { output: ImportShopifyOrdersResult | null; note?: string }
  * realtime subscription (src/lib/trigger/run-status.ts). The dialog stays open
  * for the result, because the merged orders in it are ones the operator has to
  * act on: each went back to the Address queue with its quotes deleted.
+ *
+ * `testOrder` is the shopify_import_test_order debug setting as the page saw it.
+ * It changes the label and the confirmation so a switch left on is visible --
+ * otherwise every later import quietly fetches one order and the store looks
+ * as if it had no new orders. The action re-reads the setting when it starts.
  */
-export function ShopifyImportButton() {
+export function ShopifyImportButton({ testOrder }: { testOrder: string | null }) {
   const router = useRouter()
   const confirm = useConfirm()
   const [open, setOpen] = React.useState(false)
@@ -51,12 +59,21 @@ export function ShopifyImportButton() {
   const busy = isStarting || running
 
   async function handleClick() {
-    const ok = await confirm({
-      title: "Import orders from Shopify?",
-      description:
-        "Every unshipped Shopify order not already in go2office is added as Pending. An order from a customer who already has a Pending Shopify order at the same address is merged into it, which sends that order back to the Address check and clears its quotes.",
-      confirmText: "Import",
-    })
+    const merging =
+      "An order from a customer who already has a Pending Shopify order at the same address is merged into it, which sends that order back to the Address check and clears its quotes."
+    const ok = await confirm(
+      testOrder
+        ? {
+            title: `Debug import: only ${testOrder}?`,
+            description: `The shopify_import_test_order debug setting is on, so only this order is fetched — shipped or not — and added as Pending unless it is already in go2office. ${merging} Turn the setting off in Settings → Debug for a normal import.`,
+            confirmText: "Import this order",
+          }
+        : {
+            title: "Import orders from Shopify?",
+            description: `Every unshipped Shopify order not already in go2office is added as Pending. ${merging}`,
+            confirmText: "Import",
+          }
+    )
     if (!ok) return
 
     startTransition(async () => {
@@ -64,6 +81,15 @@ export function ShopifyImportButton() {
       if (!result.success || !result.data) {
         toast.error("Failed to start the Shopify import", { description: result.error })
         return
+      }
+      // The setting may have changed since this page was rendered.
+      if (result.data.testOrder !== testOrder) {
+        toast.warning(
+          result.data.testOrder
+            ? `Debug mode is on: importing only ${result.data.testOrder}`
+            : "Debug mode was turned off: importing every unshipped order"
+        )
+        router.refresh()
       }
       setEnding(null)
       setOpen(true)
@@ -73,10 +99,20 @@ export function ShopifyImportButton() {
 
   return (
     <>
-      <Button size="sm" variant="outline" onClick={handleClick} disabled={busy}>
-        {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-        Import from Shopify
-      </Button>
+      <div className="flex flex-col items-end gap-1">
+        <Button size="sm" variant="outline" onClick={handleClick} disabled={busy}>
+          {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+          Import from Shopify
+        </Button>
+        {testOrder ? (
+          <Link href="/settings/debug">
+            <Badge variant="outline" className="gap-1 border-warning/60 text-warning-foreground">
+              <Bug className="size-3" />
+              Debug: only {testOrder}
+            </Badge>
+          </Link>
+        ) : null}
+      </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
         {/* Rule 12. The failure list is unbounded. */}
@@ -86,7 +122,9 @@ export function ShopifyImportButton() {
             <DialogDescription>
               {running
                 ? "Closing this window does not stop the import."
-                : "Unshipped orders from go2buy-australia.myshopify.com."}
+                : testOrder
+                  ? `Debug mode: only ${testOrder} from go2buy-australia.myshopify.com.`
+                  : "Unshipped orders from go2buy-australia.myshopify.com."}
             </DialogDescription>
           </DialogHeader>
 
@@ -163,6 +201,15 @@ function ImportSummary({ ending }: { ending: Ending }) {
         <CheckCircle2 className="size-4 text-success-foreground" />
         Import finished
       </p>
+
+      {output.testOrder ? (
+        <p className="flex items-start gap-1.5 text-xs text-warning-foreground">
+          <Bug className="mt-0.5 size-3.5 shrink-0" />
+          {output.fetched === 0
+            ? `Debug mode: no Shopify order matches ${output.testOrder}. Check the name or id in Settings → Debug.`
+            : `Debug mode: only ${output.testOrder} was fetched.`}
+        </p>
+      ) : null}
 
       <dl className="flex flex-col gap-1.5">
         {rows.map(([label, value]) => (

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { runs, tasks } from "@trigger.dev/sdk"
 
 import type { ActionResult } from "@/lib/actions/action-result"
+import { activeDebugValue } from "@/lib/queries/debug-settings"
 import { createClient } from "@/lib/supabase/server"
 import { snapshotOf, type RunSnapshot } from "@/lib/trigger/run-status"
 import type {
@@ -13,20 +14,39 @@ import type {
 
 export type ShopifyImportStatus = RunSnapshot<ImportShopifyOrdersResult>
 
-/** Starts the import. The page polls getShopifyImportStatus with the run id. */
-export async function triggerShopifyImport(): Promise<ActionResult<{ runId: string }>> {
+/**
+ * Starts the import. The page polls getShopifyImportStatus with the run id.
+ *
+ * The shopify_import_test_order debug setting is read here, at trigger time,
+ * rather than trusted from the page: the button's label could be minutes old.
+ * The value actually used comes back in `testOrder` and in the run's output.
+ */
+export async function triggerShopifyImport(): Promise<
+  ActionResult<{ runId: string; testOrder: string | null }>
+> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) return { success: false, error: "Your session has expired" }
 
+  // Fail closed. "Off" means every unshipped order, so a switch that cannot be
+  // read must not be taken as off.
+  const debug = await activeDebugValue(supabase, "shopify_import_test_order")
+  if (debug.error) {
+    return {
+      success: false,
+      error: `Could not read the debug settings, so the import was not started: ${debug.error}`,
+    }
+  }
+  const testOrder = debug.value
+
   try {
     const run = await tasks.trigger<typeof importShopifyOrdersTask>(
       "import-shopify-orders",
-      { userId: user.id }
+      { userId: user.id, ...(testOrder ? { testOrder } : {}) }
     )
-    return { success: true, data: { runId: run.id } }
+    return { success: true, data: { runId: run.id, testOrder } }
   } catch (error) {
     // Almost always no dev worker running, or TRIGGER_SECRET_KEY missing.
     return {

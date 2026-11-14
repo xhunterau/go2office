@@ -53,6 +53,7 @@ const settingsItems = [
   { title: "Shipping", href: "/settings/shipping" },
   { title: "Postcodes", href: "/settings/postcodes" },
   { title: "Countries", href: "/settings/countries" },
+  { title: "Debug", href: "/settings/debug" },
 ]
 
 // Orders, Customers and Export Labels are one workflow — a customer places an

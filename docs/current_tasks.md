@@ -199,17 +199,20 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
 | `maxDuration` | 600 秒 |
 | `queue` | `concurrencyLimit: 1` |
 | `retry` | **`maxAttempts: 1`**：重跑本身是安全的（已导入的会被识别为重复），但会把第一次的失败藏起来 |
-| 触发条件 | `/orders` 页头的 `Import from Shopify` 按钮（`triggerShopifyImport()` Server Action），只能手工触发。首次对生产跑时，可以在控制台带上 `testOrderName` 只导一张 |
+| 触发条件 | `/orders` 页头的 `Import from Shopify` 按钮（`triggerShopifyImport()` Server Action），只能手工触发。`/settings/debug` 的 `shopify_import_test_order` 开着时，Action 在触发那一刻读它并带上 `testOrder`，只导那一张（[shopify-order-import.md §7](shopify-order-import.md)）；读开关失败则**不触发**（关 = 全量，不能把读不到当成关） |
 
 ### 入参 / 返回
 
 ```ts
 // 入参
 { userId?: string | null      // auth.users.id，写进 order_logs.user_id
-  testOrderName?: string }    // "#G2B24707"：只导这一张。页面从不传
+  testOrder?: string }        // 只导这一张："#G2B24707" / "G2B24707" 按 name 查，
+                              // ≥10 位纯数字 "7930453721225" 按 id 查（ordersFilter）。
+                              // 来自 debug 开关，也可在控制台手填
 
 // 返回
 {
+  testOrder: string | null    // 本次限定的单号，全量导入为 null
   fetched: number             // 从 Shopify 拉到的未发货订单数
   imported: number            // 新建的订单
   merged: number              // 合并进同一客户 pending 订单的 Shopify 单

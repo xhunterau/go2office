@@ -85,6 +85,30 @@
 
 ## 6. 验证
 
-- 单测：`npx vitest run src/lib/shopify`（mapper 15 条）
+- 单测：`npx vitest run src/lib/shopify`（mapper 15 条 + `ordersFilter` 4 条） · `src/lib/validations/__tests__/debug-setting.test.ts`（6 条）
 - 函数：2026-11-11 在事务内建函数并跑 7 个场景后 ROLLBACK，覆盖新建、重复、合并（大小写与空格不同）、地址不同不合并、Laravel 已导入的单、`authenticated` 被拒、无明细整单回滚
 - 端到端干跑：真实拉取 + 函数调用 + ROLLBACK，结果见 current_tasks.md
+
+---
+
+## 7. 调试模式：只导指定的一张单（2026-11-14）
+
+移植自 xpros 的 `debug_settings` 表 + `/admin/debug-console`。入口是 **Settings → Debug**（`/settings/debug`），开关键为 `shopify_import_test_order`。
+
+- **打开 + 填单号 + Save** 后，`/orders` 的 Import from Shopify 只拉这一张：按钮下方出现 `Debug: only #G2B24707` 徽章，确认框标题变成 `Debug import: only …`，结果框里也会写明。**用完要关**，否则以后每次导入都只拉一张，看上去就像店里没有新单
+- **单号两种写法都认**：`#G2B24707` / `G2B24707` 按 `name:` 查；≥10 位纯数字（`7930453721225`，即 `orders.web_order_id` 里存的值）按 `id:` 查。xpros 的开关说明写的是填 legacyResourceId，代码却拿它去查 `name:`，照说明填就什么都查不到、也不报错——这里修掉了
+- **会绕过「未发货」过滤**，所以已发货的单也能拉下来；已取消单与测试单照样忽略。**去重照常生效**：已经在库里的单只会被计为 duplicate，要重测同一张得先删掉库里那张。**合并规则也照常生效**
+- 这就是 §5 所说「首次对生产库导入」最稳妥的方式：先单张试
+- 开关在 Server Action **触发那一刻**重新读取，不信任页面上的徽章（可能是几分钟前渲染的）。两者不一致时弹 warning 并刷新页面。**读开关失败就不触发**——「关」意味着全量导入，不能把读不到当成关
+
+### 表结构与权限（迁移 `20261114100000`）
+
+`debug_settings(key PK, value, enabled, description, updated_by, updated_at)`，与 xpros 同构。go2office 没有 admin 角色，**任何登录用户都能改**。RLS 按规则 22 收窄：
+
+- 无 INSERT / DELETE 策略：**新开关只能由迁移加**
+- `REVOKE UPDATE` 再 `GRANT UPDATE (value, enabled, updated_by)`：key 与 description 改不了
+- `WITH CHECK (updated_by = auth.uid())`：「最后修改人」冒充不了别人
+
+**新增开关要同时改两处**：迁移插一行，[src/lib/debug/settings.ts](../src/lib/debug/settings.ts) 的 `DEBUG_SETTINGS` 加一项（标签、占位符、值校验）。只有行没有注册项的，页面显示为「No code reads this setting」且不可编辑；只有注册项没有行的，该开关永远是关的。
+
+开着却没填值的保存会被 zod 拒绝（两侧都校验，单测 `src/lib/validations/__tests__/debug-setting.test.ts`）：否则页面显示调试中，导入却按全量走。

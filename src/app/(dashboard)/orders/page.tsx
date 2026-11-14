@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server"
+import { activeDebugValue } from "@/lib/queries/debug-settings"
 import {
   fetchOrderList,
   fetchOrderStatusCounts,
@@ -21,9 +22,11 @@ export default async function OrdersPage({
 
   const supabase = await createClient()
 
-  const [list, statusCounts] = await Promise.all([
+  const [list, statusCounts, shopifyDebug] = await Promise.all([
     fetchOrderList(supabase, filters),
     fetchOrderStatusCounts(supabase),
+    // Only the button's label. The action reads it again when the import starts.
+    activeDebugValue(supabase, "shopify_import_test_order"),
   ])
 
   return (
@@ -37,7 +40,7 @@ export default async function OrdersPage({
             to see what was sold.
           </p>
         </div>
-        <ShopifyImportButton />
+        <ShopifyImportButton testOrder={shopifyDebug.value} />
       </div>
 
       {/* A failed count costs the tabs their numbers, not their links, so it is
