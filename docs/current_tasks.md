@@ -8,7 +8,7 @@
 | SDK | `@trigger.dev/sdk` v4（**导入路径必须是包根，严禁 `@trigger.dev/sdk/v3`**） |
 | 配置 | [trigger.config.ts](../trigger.config.ts) —— `runtime: "node-24"`，`dirs: ["./src/trigger"]` |
 | 环境 | **staging**（`TRIGGER_SECRET_KEY` 是 `tr_stg_` 前缀）。查 run / deploy 时选 staging，选 dev 会显示 0 条 |
-| 本地开发 | `npm run trigger:dev`（CLI 自动读 `.env.local`，无需 `--env-file`） |
+| 本地开发 | `npm run trigger:dev`（CLI 自动读 `.env.local`，无需 `--env-file`）。脚本带 `NODE_OPTIONS=--no-network-family-autoselection`：WSL 下 Node 的 IPv4/IPv6 自动选择会让连 Shopify 的请求 `ETIMEDOUT`（curl 0.19 秒能连上，2026-11-11 实测），去掉这个参数本地导入就会失败 |
 | ⚠️ 新 Task 必须先 deploy 才跑得起来 | **`trigger.dev dev` 在 staging key 下不接管 run。**2026-08-29 实测：本地 worker 注册了版本 `20260829.1`，但 staging 的 current worker 仍是部署版 `20260823.1`，于是新 Task 的 run 一直停在 `PENDING_VERSION`，两次触发都是。要让一个新 Task 能跑，得 `npx trigger.dev deploy`。**卡住的 run TTL 默认 14 天**——不取消的话，下次部署会把它们同时放行，同一张订单被灌两批数据 |
 
 ---
@@ -184,3 +184,66 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
 ### 环境变量
 
 与另外两个 Task 相同的 6 个。同样的警告：**部署环境读不到 `.env.local`**，必须在 Trigger.dev 控制台另配一份。
+
+---
+
+## `import-shopify-orders`
+
+把 go2buy-australia 的 Shopify 店里**所有未发货订单**拉进 go2office，作为 `pending` 进入 Order Allocation。移植自 xpros 的同名 Task，差异见 [docs/shopify-order-import.md](shopify-order-import.md)。
+
+| | |
+|---|---|
+| Job ID | `import-shopify-orders` |
+| 源文件 | [src/trigger/import-shopify-orders.ts](../src/trigger/import-shopify-orders.ts) |
+| 核心逻辑 | 拉取：[src/lib/shopify/orders.ts](../src/lib/shopify/orders.ts)；映射：[src/lib/shopify/order-mapper.ts](../src/lib/shopify/order-mapper.ts)；写库：SQL 函数 `public.import_shopify_order(jsonb, uuid)`（迁移 `20261111100000`） |
+| `maxDuration` | 600 秒 |
+| `queue` | `concurrencyLimit: 1` |
+| `retry` | **`maxAttempts: 1`**：重跑本身是安全的（已导入的会被识别为重复），但会把第一次的失败藏起来 |
+| 触发条件 | `/orders` 页头的 `Import from Shopify` 按钮（`triggerShopifyImport()` Server Action），只能手工触发。首次对生产跑时，可以在控制台带上 `testOrderName` 只导一张 |
+
+### 入参 / 返回
+
+```ts
+// 入参
+{ userId?: string | null      // auth.users.id，写进 order_logs.user_id
+  testOrderName?: string }    // "#G2B24707"：只导这一张。页面从不传
+
+// 返回
+{
+  fetched: number             // 从 Shopify 拉到的未发货订单数
+  imported: number            // 新建的订单
+  merged: number              // 合并进同一客户 pending 订单的 Shopify 单
+  mergedInvoices: string[]    // 被合并的 go2office 订单号 —— 它们被打回了 Address 队列
+  duplicates: number          // 已在 go2office（本导入或 Laravel 导入的）
+  ignored: number             // 已取消 / 测试单 / 数量都被编辑成 0，不送进数据库
+  failures: { name: string; reason: string }[]
+}
+```
+
+进度：`metadata.set("stage", "fetching" | "processing")` 与 `metadata.set("progress", { current, total })`，页面轮询读（`getShopifyImportStatus()`），共用 `use-batch-run-poll.ts` 与 `run-status.ts`。
+
+### 它会写哪些表
+
+Task 自己一行都不写，**全部经 `import_shopify_order()`，每张 Shopify 订单一个事务**：
+
+- `customers`：按「姓名 + 地址第一行 + 邮编」匹配不到时新建（`customers_standardize_address` 触发器改写 state / country）
+- `orders`：新建 `pending` / `shopify` 订单；**或者**合并进已有订单：累加 `postage_and_handling` / `discount`，**清空 `address_verified_at`**，备注追加到 `comments`
+- `order_shipping_quotes`：合并时**删除**被合并订单的全部旧报价
+- `order_transactions`：每个 line item 一行（`order_transactions_rebuild_items_insert` 触发器随之生成 `order_items`，`oms_*` 触发器重算 `order_metrics_summary`）
+- `order_logs`：每张一行
+
+### 环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | 函数对 `anon` / `authenticated` 撤销了 EXECUTE，只能用 service role 调 |
+| `SHOPIFY_STORE_DOMAIN` | `go2buy-australia.myshopify.com`。**不是** `go2buy.com.au`，换 token 的端点只认 myshopify 域名 |
+| `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET` | Dev Dashboard app「go2office order import」的 Credentials |
+| `SHOPIFY_API_VERSION` | 可选，默认 `2026-10` |
+
+**部署环境读不到 `.env.local`**，Shopify 这 3～4 个变量必须在 Trigger.dev 控制台（staging）另配一份。
+
+### 实测（2026-11-11，干跑，全程 ROLLBACK）
+
+拉到 12 张未发货订单（最早 2026-09-14）：10 张新建、1 张合并、1 张已取消被忽略、0 失败；1 行 SKU 解析不到（订单上显示 Unresolved SKU）。
+

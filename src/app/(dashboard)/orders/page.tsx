@@ -9,6 +9,7 @@ import { EstimatedPagination } from "@/components/estimated-pagination"
 import { OrdersTable } from "@/components/orders/orders-table"
 import { OrdersFilters } from "./_components/orders-filters"
 import { OrdersStatusTabs } from "./_components/orders-status-tabs"
+import { ShopifyImportButton } from "./_components/shopify-import-button"
 
 export default async function OrdersPage({
   searchParams,
@@ -27,13 +28,16 @@ export default async function OrdersPage({
 
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">Orders</h1>
-        <p className="text-sm text-muted-foreground">
-          Every order in the system. Pick a status tab for a work queue, or
-          search by invoice, tracking, customer, suburb or SKU. Expand a row to
-          see what was sold.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Orders</h1>
+          <p className="text-sm text-muted-foreground">
+            Every order in the system. Pick a status tab for a work queue, or
+            search by invoice, tracking, customer, suburb or SKU. Expand a row
+            to see what was sold.
+          </p>
+        </div>
+        <ShopifyImportButton />
       </div>
 
       {/* A failed count costs the tabs their numbers, not their links, so it is

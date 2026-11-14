@@ -1611,6 +1611,16 @@ export type Database = {
         Args: { p_order_id: number }
         Returns: number
       }
+      // One Shopify order, atomically: duplicate check on order_id_ebay,
+      // customer match (name + address line 1 + postcode) or create, merge into
+      // that customer's pending Shopify order or create a new one, lines, log.
+      // EXECUTE is revoked from anon and authenticated; only the
+      // import-shopify-orders task calls it, with the service role. p_order is
+      // ShopifyImportPayload from src/lib/shopify/order-mapper.ts.
+      import_shopify_order: {
+        Args: { p_order: Json; p_user_id?: string | null }
+        Returns: Json
+      }
       // Order Allocation's batch address check. Marks every pending AU order
       // whose (postcode, suburb) resolves in public.postcodes as
       // address-verified and logs each one, in a single statement. Returns how

@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "trigger:dev": "npx trigger.dev@latest dev",
+    "trigger:dev": "NODE_OPTIONS=--no-network-family-autoselection npx trigger.dev@latest dev",
     "lint": "eslint",
     "test": "vitest run"
   },
