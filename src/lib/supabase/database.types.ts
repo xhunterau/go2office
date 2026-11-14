@@ -1732,6 +1732,20 @@ export type Database = {
         }
         Returns: Json
       }
+      // Migration 20261114150000. Deducts stock, records pick locations, sets
+      // the tracking number and moves a `labelled` order to `completed`, in one
+      // transaction. p_picks is DispatchPick[] (src/lib/fulfillment/dispatch.ts).
+      // Returns the stored, normalised tracking number. Errors: GO001 tracking
+      // number on another order, GO002 not enough stock.
+      dispatch_order: {
+        Args: {
+          p_order_id: number
+          p_tracking_number: string
+          p_picks: Json
+          p_allow_shared_tracking?: boolean
+        }
+        Returns: string
+      }
       // Username and refresh-token expiry of each authorised eBay seller,
       // without the token (ebay_accounts itself has no policies). SECURITY
       // DEFINER, granted to authenticated, for the expiry warning on /orders.

@@ -56,9 +56,9 @@ const settingsItems = [
   { title: "Debug", href: "/settings/debug" },
 ]
 
-// Orders, Customers and Export Labels are one workflow — a customer places an
-// order, it gets picked, it ships — so they share a group rather than sitting as
-// three flat entries. Listed in the order the work happens in.
+// Orders, Customers and the three fulfillment steps are one workflow — a
+// customer places an order, it gets labelled, it ships — so they share a group
+// rather than sitting as flat entries. Listed in the order the work happens in.
 const salesItems = [
   { title: "Orders", href: "/orders" },
   { title: "Customers", href: "/customers" },
@@ -66,6 +66,9 @@ const salesItems = [
   // Processing one, which is the queue Export Labels reads.
   { title: "Allocation", href: "/fulfillment/allocation" },
   { title: "Export Labels", href: "/fulfillment/export-labels" },
+  // Last: the label is on the parcel, and this takes it out of stock and
+  // completes the order.
+  { title: "Dispatch", href: "/fulfillment/dispatch" },
 ]
 
 export function AppSidebar() {

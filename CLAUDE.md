@@ -173,3 +173,10 @@
 - **引擎会把订单从队列里拿走**：`runQuoteEngine` 报不出价时自己把 `status` 改成 `issued`，订单当场脱离 `pending`。Task 必须单独统计 `escalatedCount` 并在页面单独提示，否则唯一可见的现象是「队列莫名短了几张」。
 - **Address 表单不接受 `state` / `country` / `line3` / `line4`**：`state` 会被 `customers_standardize_address` 在保存瞬间重算（规则 21 的静默改写），`country` 改了就脱离 AU-only 队列，`line3` 有 114,161 行是 `ebay:xxxx` 引用码（规则 24）。
 - **Places 选完不等于能解析**：Google 返回的 `locality` 未必在 `public.postcodes` 里，`city` 退到 `sublocality_level_1` / `administrative_area_level_2` 时尤其可疑。保存前要复查并对未解析的组合弹确认框，但**不拦住保存**。Maps key 与 xpros 共用，且**当前没有任何 referrer 限制**（2026-08-24 实测三种 referer 均 200）。
+
+# 26. 发货（/fulfillment/dispatch）
+- **范围**：`labelled` → `completed` 这一步，由数据库函数 `dispatch_order()`（迁移 `20261114150000`）加上 `src/lib/{fulfillment,queries,actions,validations}/dispatch.ts` 实现。xpros 的拣货和打包两步在这里合并成一步，**没有 `Pick` 中间状态，也不逐件扫商品条码**（用户决策）。详见 `docs/order-dispatch.md`。
+- **扣库存、写拣货库位、写运单号、改状态、写日志必须留在同一个函数、同一个事务里**：严禁拆成 Server Action 里的多条语句。xpros 就是先 update 再 insert，会出现订单已发货但没有日志的情况。正因为日志在同一个事务里，这条路径**没有**规则 24 那种「日志写失败只给 warning」的分支，不要补上。
+- **扣库存只能经过 `record_stock_movement`**，严禁直接 `UPDATE inventory_levels`。短缺要先在行锁下一次全部列出（`GO002`），不能靠非负约束报一条看不懂的 `23514`。库存不够时，发货页只提供修正入口（复用 `StockMovementDialog`），**严禁在发货流程里自动盘点去「凑够」数量**。
+- **运单号先归一化再查重**：比较前必须先 `normalize_tracking_number()`（规则 20），否则扫出来的整串 GS1-128 条码永远查不到重复。重复运单号是 `GO001` 加确认框，不是直接拦死：Shopify 和 eBay 的单按决策不合并，但可能装在同一个包裹里发出。
+- **`p_picks` 必须覆盖订单的每个 `order_items` 行、每行恰好一次**：明细行会被 `rebuild_order_items` 重建、换成新 id，对不上说明页面已过期，函数直接拒绝，严禁改成「按 SKU 猜着对上」。

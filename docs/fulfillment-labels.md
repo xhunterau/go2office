@@ -17,7 +17,7 @@
 |---|---|---|
 | 1 | **拣货分区不做** | xpros 每张 CSV 的 ref 是 `job_id[picking_zone]`，每单一次 `calculate_picking_zone` RPC。go2office 没有 `picking_zones` 表，也不建——整个 N+1 消失 |
 | 2 | **参考号复用 `invoice_number`** | 不新增 `orders.job_id` |
-| 3 | **`processing` 就是 xpros 的 `Ready`** | 出标签后进 `labelled` |
+| 3 | **`processing` 就是 xpros 的 `Ready`** | 出标签后进 `labelled`，再由 `/fulfillment/dispatch` 扣库存、录运单号，进 `completed`（2026-11-14，见 `docs/order-dispatch.md`） |
 | 4 | **eParcel charge code：Regular `3D55` / Express `3J55`** | 无 Z6 账号，国际件的 code 未知 |
 | 5 | **Direct Freight 不做** | 全库 0 单 |
 | 6 | **Click & Collect 不做** | xpros 那块含合单与库存充足度判断，约 400 行 |
