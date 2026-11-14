@@ -518,6 +518,74 @@ export type Database = {
         }
         Relationships: []
       }
+      // RLS on, no policies: service role only (docs/ebay-integration.md).
+      ebay_accounts: {
+        Row: {
+          ebay_user_id: string
+          username: string
+          refresh_token: string
+          refresh_token_expires_at: string
+          scopes: string[]
+          authorized_at: string
+          updated_at: string
+        }
+        Insert: {
+          ebay_user_id: string
+          username: string
+          refresh_token: string
+          refresh_token_expires_at: string
+          scopes: string[]
+          authorized_at?: string
+          updated_at?: string
+        }
+        Update: {
+          ebay_user_id?: string
+          username?: string
+          refresh_token?: string
+          refresh_token_expires_at?: string
+          scopes?: string[]
+          authorized_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      // RLS on, no policies: written by the ebay-account-deletion Edge Function.
+      ebay_account_deletions: {
+        Row: {
+          notification_id: string
+          ebay_user_id: string | null
+          username: string | null
+          eias_token: string | null
+          event_date: string | null
+          publish_date: string | null
+          payload: Json
+          received_at: string
+          processed_at: string | null
+        }
+        Insert: {
+          notification_id: string
+          ebay_user_id?: string | null
+          username?: string | null
+          eias_token?: string | null
+          event_date?: string | null
+          publish_date?: string | null
+          payload: Json
+          received_at?: string
+          processed_at?: string | null
+        }
+        Update: {
+          notification_id?: string
+          ebay_user_id?: string | null
+          username?: string | null
+          eias_token?: string | null
+          event_date?: string | null
+          publish_date?: string | null
+          payload?: Json
+          received_at?: string
+          processed_at?: string | null
+        }
+        Relationships: []
+      }
       carriers: {
         Row: {
           id: number
