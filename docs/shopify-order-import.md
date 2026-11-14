@@ -85,6 +85,8 @@
 
 ## 6. 验证
 
+> 2026-11-14 起，`import_shopify_order` 的函数体搬进了与 eBay 共用的 `import_platform_order`（迁移 `20261114130000`），它本身只剩一层改名 payload 键的包装。§3 的匹配与合并规则不变，只是现在**限定同平台**：Shopify 单不会并进同一客户的 eBay 单，反之亦然（[ebay-order-import.md](ebay-order-import.md) §1）。
+
 - 单测：`npx vitest run src/lib/shopify`（mapper 15 条 + `ordersFilter` 4 条） · `src/lib/validations/__tests__/debug-setting.test.ts`（6 条）
 - 函数：2026-11-11 在事务内建函数并跑 7 个场景后 ROLLBACK，覆盖新建、重复、合并（大小写与空格不同）、地址不同不合并、Laravel 已导入的单、`authenticated` 被拒、无明细整单回滚
 - 端到端干跑：真实拉取 + 函数调用 + ROLLBACK，结果见 current_tasks.md

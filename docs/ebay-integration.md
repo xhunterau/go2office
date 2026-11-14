@@ -50,7 +50,7 @@ npx dotenv-cli -e .env.local -- node scripts/ebay/authorize.mjs "<落地页完�
 
 **scope 清单只写在 `scripts/ebay/authorize.mjs` 里**，授权时存进 `ebay_accounts.scopes`；`src/lib/ebay/client.ts` 刷新时原样用这份。刷新请求的 scope 超出已同意范围会直接失败，所以**加 scope = 改脚本 + 重新授权**。当前：`sell.fulfillment`（读写；读订单 + 以后回写运单号，用户确认一定会做，故提前申请，免得再授权一次）、`commerce.identity.readonly`。
 
-**何时需要重新授权**：refresh token 18 个月到期；卖家改密码或在 eBay 撤销 app 授权会提前失效；scope 清单变化。失效时 `client.ts` 抛 `EbayReauthorizationRequired`，导入报错而不是静默少导。**到期提醒**（`REFRESH_TOKEN_WARNING_MS`，30 天）尚无界面，计划随 Import from eBay 按钮一起做。
+**何时需要重新授权**：refresh token 18 个月到期；卖家改密码或在 eBay 撤销 app 授权会提前失效；scope 清单变化。失效时 `client.ts` 抛 `EbayReauthorizationRequired`，导入报错而不是静默少导。**到期提醒**（`REFRESH_TOKEN_WARNING_MS`，30 天）显示在 `/orders` 的 Import from eBay 按钮下方，经 `ebay_authorization_status()` 读取（迁移 `20261114130000`，只返回用户名与到期时间、不含 token）；过期则按钮禁用。
 
 **当前状态（2026-11-14）**：已授权卖家账号 `go2buy_au`（userId `CsMlJk7dTqS`），refresh token 到期 **2028-05-14**。eBay 门户的 Send Test Notification 已打通，测试行（`test_user`）已删除。
 
@@ -68,4 +68,4 @@ npx dotenv-cli -e .env.local -- node scripts/ebay/authorize.mjs "<落地页完�
 
 ## 5. 表与权限（迁移 `20261114120000`）
 
-`ebay_accounts`、`ebay_account_deletions` 都是 **RLS 开、零策略**：只有 service role 能读写。2026-11-14 用 `SET ROLE authenticated` 在已有行上实测：SELECT / UPDATE / DELETE 均 0 行，INSERT 报 RLS 违规（规则 22）。以后要在页面上显示 token 到期时间，需要加 SELECT 策略**并**用 REVOKE + 列级 GRANT 挡住 `refresh_token` 列。
+`ebay_accounts`、`ebay_account_deletions` 都是 **RLS 开、零策略**：只有 service role 能读写。2026-11-14 用 `SET ROLE authenticated` 在已有行上实测：SELECT / UPDATE / DELETE 均 0 行，INSERT 报 RLS 违规（规则 22）。页面上的到期时间不读这张表，而是走 SECURITY DEFINER 函数 `ebay_authorization_status()`，所以这两张表仍然零策略。

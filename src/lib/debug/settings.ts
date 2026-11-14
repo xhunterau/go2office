@@ -8,6 +8,8 @@
 // Client-safe: no server imports. The page renders labels from it and the
 // validation schema checks values against it on both sides (rule 6).
 
+import { EBAY_ORDER_ID_PATTERN } from "@/lib/ebay/order-id"
+
 export type DebugSettingSpec = {
   label: string
   valueLabel: string
@@ -28,6 +30,18 @@ export const DEBUG_SETTINGS = {
       /^#?[A-Za-z0-9-]+$/.test(value)
         ? null
         : "Use the order name (#G2B24707) or its numeric id (7930453721225)",
+  },
+  // Read by triggerEbayImport() (src/lib/actions/ebay-import.ts) and passed to
+  // the task as testOrder; fetchEbayOrders() asks eBay for that order id only.
+  // The sales record number (326100) cannot be searched through the API.
+  ebay_import_test_order: {
+    label: "eBay Import — Test Order",
+    valueLabel: "eBay order number",
+    placeholder: "17-15414-28640",
+    validate: (value) =>
+      EBAY_ORDER_ID_PATTERN.test(value)
+        ? null
+        : "Use the eBay order number (17-15414-28640), not the sales record number",
   },
 } satisfies Record<string, DebugSettingSpec>
 

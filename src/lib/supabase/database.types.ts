@@ -1718,6 +1718,27 @@ export type Database = {
         Args: { p_order: Json; p_user_id?: string | null }
         Returns: Json
       }
+      // The body of import_shopify_order since 20261114130000, shared with the
+      // eBay import: the same duplicate check, customer match and merge, all
+      // restricted to p_platform ('shopify' | 'ebay'; anything else raises).
+      // Revoked from anon and authenticated; import-ebay-orders calls it with
+      // the service role. p_order for eBay is EbayImportPayload from
+      // src/lib/ebay/order-mapper.ts.
+      import_platform_order: {
+        Args: {
+          p_platform: Database["public"]["Enums"]["sales_platform"]
+          p_order: Json
+          p_user_id?: string | null
+        }
+        Returns: Json
+      }
+      // Username and refresh-token expiry of each authorised eBay seller,
+      // without the token (ebay_accounts itself has no policies). SECURITY
+      // DEFINER, granted to authenticated, for the expiry warning on /orders.
+      ebay_authorization_status: {
+        Args: Record<string, never>
+        Returns: { username: string; refresh_token_expires_at: string }[]
+      }
       // Order Allocation's batch address check. Marks every pending AU order
       // whose (postcode, suburb) resolves in public.postcodes as
       // address-verified and logs each one, in a single statement. Returns how

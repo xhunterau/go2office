@@ -1,75 +1,84 @@
-# eBay 订单导入（开发中）
+# eBay 订单导入
 
-> **状态（2026-11-14）**：前置管道已完成并在生产库验证；订单导入本身**尚未开始**，卡在下面 §3 的决策上。
-> 管道细节（OAuth、账号删除通知、表与权限）见 [ebay-integration.md](ebay-integration.md)。本文件是**接手开发的入口**。
+> **状态（2026-11-14）**：已实现并在生产库端到端验证（Debug 单张导入 `20-15407-95810` → 订单 206029，重跑识别为 duplicate）。入口是 `/orders` 页头的 **Import from eBay**。
+> 管道细节（OAuth、账号删除通知、表与权限）见 [ebay-integration.md](ebay-integration.md)。Task 说明见 [current_tasks.md](current_tasks.md#import-ebay-orders)。
 
-目标：把 eBay 未发货订单拉进 go2office，作为 `pending` 进入 Order Allocation，与 [Shopify 导入](shopify-order-import.md) 并列。xpros 没有这个功能，Laravel 的做法未知。
+把 eBay 未发货订单拉进 go2office，作为 `pending` 进入 Order Allocation，与 [Shopify 导入](shopify-order-import.md) 并列。xpros 没有这个功能，Laravel 的做法未知。
 
 ---
 
-## 1. 已完成
+## 1. 用户决策（2026-11-14）
 
-| 项 | 位置 | 验证 |
+| # | 问题 | 决定 |
 |---|---|---|
-| 表 `ebay_accounts` / `ebay_account_deletions`（RLS 零策略） | 迁移 `20261114120000`，已推远端；`database.types.ts` 已补 | `SET ROLE authenticated` 实测读改删 0 行、插入被拒 |
-| 账号删除通知 endpoint | `supabase/functions/ebay-account-deletion/`，已部署 | eBay 门户 Send Test Notification 已落库（测试行已删） |
-| 卖家授权脚本 | `scripts/ebay/authorize.mjs` | 卖家 `go2buy_au`（userId `CsMlJk7dTqS`）已授权，scope = `sell.fulfillment`（读写）+ `commerce.identity.readonly`，refresh token 到期 **2028-05-14** |
-| REST 客户端 | `src/lib/ebay/client.ts`（`loadEbayAccount` / `ebayGet`） | 实拉 `GET /sell/fulfillment/v1/order` 成功，返回 2 张未发货单 |
+| 1 | 上线方式 | **与 Laravel 并行**。当前库里的订单都是测试数据，上线时会从 Laravel 重新迁移一次真实数据，所以 [shopify-order-import.md §5](shopify-order-import.md) 的 id 冲突 / 重复风险在开发期不处理。**并行期间同一张 eBay 单两边都有，只能从一边发货** |
+| 2a | eBay 单之间按客户合并 | **合并**，与 Shopify 同规则（姓名 + 地址第一行 + 邮编） |
+| 2b | 跨平台合并（eBay ↔ Shopify） | **不合并**。客户行共用（同一个人两个平台的单挂同一个 `customer_id`），订单不并 |
+| 3 | `postage_service` | **按历史写法存**：`AU_StandardDelivery` → `Standard Parcel Delivery`，`AU_ExpressDelivery` → `Express Parcel Delivery`（近两年 eBay 行 14,517 / 14,564 是这两个）。表外的代码**原样存**并在结果的 notices 里列出，不拦订单（报价引擎只看 `/express/i`）。`orders.shipping_method` 导入时**留空**，由 Allocation 决定——历史上同一个 `Standard Parcel Delivery` 落到了 `Letter` / `Mypost_Reg_S_Box` / `Parcel_Post` 等 8 种方式，推不出来 |
+| 4 | 触发方式 | **只做手动按钮** |
+| 5 | 非 AU 地址 | go2buy 不发海外；万一有，**照导**，停在 pending（不进任何 Allocation 队列，与 Shopify 现状一致） |
+| — | `ebay:xxxx` 引用码 | **直接丢掉，不存**（不挪到 line3）。真实街道上移到 line1 |
 
-## 2. 换电脑接着做：需要准备的
+## 2. 实现
 
-refresh token 存在**数据库**里，新电脑**不需要重新授权**。但下列东西不在 git 里：
+| 件 | 位置 |
+|---|---|
+| 拉单 | [src/lib/ebay/orders.ts](../src/lib/ebay/orders.ts) `fetchEbayOrders()`：`filter=orderfulfillmentstatus:{NOT_STARTED\|IN_PROGRESS}`，每页 200 按 offset 翻页，按 `creationDate` **升序**（同一买家两单：先下的建单、后下的合并）。Debug 用 `orderIds=`，此时 eBay 忽略其他过滤，已发货的也能拉到（但会被跳过规则丢掉） |
+| 映射 | [src/lib/ebay/order-mapper.ts](../src/lib/ebay/order-mapper.ts)（纯函数，单测 [__tests__/order-mapper.test.ts](../src/lib/ebay/__tests__/order-mapper.test.ts) 20 条） |
+| 写库 | SQL `public.import_platform_order('ebay', jsonb, uuid)`（迁移 `20261114130000`）。**Shopify 共用同一个函数**：`import_shopify_order` 已改成改名 payload 键的薄包装，行为逐字不变（2026-11-14 事务内对比日志文本与各列） |
+| 逐单循环 / 结果类型 | [src/lib/order-import/import-orders.ts](../src/lib/order-import/import-orders.ts)，两个 Task 共用 |
+| Task | [src/trigger/import-ebay-orders.ts](../src/trigger/import-ebay-orders.ts) |
+| Action | [src/lib/actions/ebay-import.ts](../src/lib/actions/ebay-import.ts)，共用 [src/lib/order-import/start-import.ts](../src/lib/order-import/start-import.ts) |
+| 按钮 | `orders/_components/ebay-import-button.tsx` → 共用的 `order-import-button.tsx`（Shopify 按钮同样改成了薄壳） |
+| 授权到期提醒 | [src/lib/queries/ebay-authorization.ts](../src/lib/queries/ebay-authorization.ts) 调 `ebay_authorization_status()`（SECURITY DEFINER，只返回 `username` + `refresh_token_expires_at`，**不含 token**）。剩 30 天内按钮下出警告徽章；没有授权 / 多个账号 / 已过期则**禁用按钮** |
+| Debug 开关 | `ebay_import_test_order`，值是 eBay 订单号（`17-15414-28640`）。**销售记录号（326100）不行**：getOrders 不能按它查。**只对还没发货的单有用**：已发货的单能拉到，但每行都是 `FULFILLED` 会被丢掉，整单计为 ignored（与 Shopify 开关不同，迁移 `20261114140000` 修正了开关说明）|
 
-1. **`.env.local`**（被 `.gitignore` 忽略）：从旧电脑安全地拷过去。eBay 相关 5 个变量：
-   `EBAY_CLIENT_ID`、`EBAY_CLIENT_SECRET`（Cert ID）、`EBAY_RUNAME`（`…-teacg`）、`EBAY_VERIFICATION_TOKEN`、`EBAY_DELETION_ENDPOINT`。后两个同时存在于 Edge Function secrets 和 eBay 门户，**三处必须一致**
-2. **Supabase CLI 登录**（`~/.supabase/access-token`）：只有重新部署 Edge Function 或改 secrets 时才需要，`npx supabase login`
-3. 读 `.env.local` 一律按 CLAUDE.md 规则 16（`npx dotenv-cli -e .env.local -- …` 或 `grep | cut`），**严禁 source**
-4. 冒烟测试（确认新机器能连通 eBay）：写一个临时 `.mts`，`loadEbayAccount(serviceRoleClient)` 后 `ebayGet(account, "/sell/fulfillment/v1/order", { filter: "orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}", limit: 50 })`，用 `npx dotenv-cli -e .env.local -- npx jiti <file>.mts` 跑（`client.ts` 对 `@/` 只有 type import，jiti 能直接跑）
+### 跳过规则（不进数据库，计入 `ignored`）
 
-## 3. 待用户决策（开工前必须有答案）
+- `cancelStatus.cancelState` ≠ `NONE_REQUESTED`（申请取消中或已取消）→ **列入 notices**。申请被拒后再点一次导入即可
+- `orderPaymentStatus` 为 `PENDING` / `FAILED` / `FULLY_REFUNDED` → 列入 notices。`PARTIALLY_REFUNDED` 照导
+- `lineItemFulfillmentStatus = FULFILLED` 的行丢掉；全丢光则整单跳过
+- 没有收货地址、数量 ≤ 0、金额不是数字 → 计为失败，整单不写
 
-推荐项已标出，用户尚未回复。
-
-| # | 问题 | 选项 | 推荐 |
-|---|---|---|---|
-| 1 | **上线方式** | A：先开发，只用 Debug 单张试导；Laravel 停止拉 eBay 单 + 跑最终切换 `004` 后再正式用 · B：直接与 Laravel 并行 | **A**。并行会导致同一张单两边各发一次，且 `004` 按 id 覆盖，可能静默覆盖 go2office 新建的订单（[shopify-order-import.md §5](shopify-order-import.md)） |
-| 1 附 | Shopify 是否已经不在 Laravel 处理？ | — | 需用户回答。go2office 11 月已导入 20 张 Shopify 单，而 `go2_*` 临时表（11 张）仍在，即 `004` 尚未跑 |
-| 2a | eBay 单之间按客户合并 | A：合并，与 Shopify 同规则 · B：不合并 | **A**。去年 214 个客户下过 ≥2 单，同日两单仅 9 次 |
-| 2b | 跨平台合并（eBay ↔ Shopify） | A：不做 · B：做 | **A**。`orders.platform` 只有一个值，而 Shopify 去重限定 `platform='shopify'`：Shopify 行并进 eBay 单后下次会被**重新导入**。双平台客户仅 106 个 |
-| 3 | `postage_service` 存法 | A：原样存 API 的 code（`AU_StandardDelivery`）· B：映射成历史显示名（`Standard Parcel Delivery`） | **A**。报价引擎只看 `/express/i`（`quote-engine.ts`），两种都能命中；B 需要维护映射表 |
-| 4 | 触发方式 | A：先只做手动按钮 · B：一开始就定时 | **A** |
-| 5 | 非 AU 地址的单 | 照导（会停在 pending、不进任何 Allocation 队列，Shopify 现状如此）· 跳过并在结果里列出 | 未定 |
-
-已撤回的问题：Flat Rate 袋映射——历史 4.8 万行是多年前的，近两年仅 1 张，eBay 单的 `shipping_method` 都由 Allocation 决定，无需特殊处理。
-
-## 4. 已定的实现要点
-
-- **结构照搬 Shopify**：`src/lib/ebay/orders.ts`（分页拉取）+ `src/lib/ebay/order-mapper.ts`（纯函数 + 单测）+ SQL 函数（与 `import_shopify_order` **共用**客户匹配 / 合并 / 发票号 / 日志逻辑，抽内部函数，不复制）+ Trigger Task `import-ebay-orders`（串行、`maxAttempts: 1`、`concurrencyLimit: 1`、轮询进度；**同步更新 `docs/current_tasks.md`**）
-- **拉取条件**：`filter=orderfulfillmentstatus:{NOT_STARTED|IN_PROGRESS}`，每页最多 200
-- **跳过规则（待用户确认 §3-5，其余默认）**：`cancelStatus.cancelState` ≠ `NONE_REQUESTED` 的单跳过并在结果里列出（申请取消中的不导，免得发出去）；`lineItemFulfillmentStatus` 已完成的行丢弃
-- **去重键**：`order_transactions.order_id_ebay` = `orderId`（`22-15404-74231` 格式，与 17.8 万行历史同口径），限定 `orders.platform = 'ebay'`
-- **`ebay:xxxx` 引用码在 API 的 `shipTo.contactAddress.addressLine1`**，真实街道在 `addressLine2`。必须挪到 `customers.address_line3`（历史位置），真实街道上移到 line1——line1 是客户匹配三要素之一，不挪则同一客户每次都匹配不上。该引用码 **≠** `buyer.username`
-- **邮箱**：`shipTo.email` 是 `@members.ebay.com` 中转地址，照存（历史上 eBay 客户 99% 是这种），**不可用于客户匹配**
-- **Debug 单张导入**：新增开关 `ebay_import_test_order`（迁移插行 + `src/lib/debug/settings.ts` 注册，见 shopify-order-import.md §7）
-- **授权到期提醒**：Import from eBay 按钮旁，refresh token 剩 30 天内显示警告（常量 `REFRESH_TOKEN_WARNING_MS` 已在 `client.ts`）。读 `ebay_accounts` 须走 service role（表无策略），或加 SELECT 策略并用 REVOKE + 列级 GRANT 挡住 `refresh_token`（规则 22）
-
-### 字段映射（草案，按 2 张真实单的结构）
+### 字段映射
 
 | go2office | eBay Fulfillment API |
 |---|---|
-| `order_transactions.order_id_ebay` | `orderId` |
-| `order_transactions.sales_record_number` | `salesRecordReference` |
+| `order_transactions.order_id_ebay`（去重键，限定 `platform='ebay'`） | `orderId`（与 17.8 万行历史同口径，所以 Laravel 导入过的单也会被识别为重复） |
+| `order_transactions.sales_record_number` | `salesRecordReference`（缺失时退回 `orderId`） |
 | `order_transactions.transaction_id_ebay` | `lineItems[].lineItemId` |
 | `order_transactions.item_number` | `lineItems[].legacyItemId` |
 | `order_transactions.custom_label` | `lineItems[].sku`，trim |
 | `order_transactions.item_title` | `lineItems[].title` |
 | `order_transactions.quantity` | `lineItems[].quantity` |
-| `order_transactions.sale_price` | `lineItems[].lineItemCost.value / quantity`（**待核**：lineItemCost 是否为行总额） |
-| `order_transactions.postage_service` | `fulfillmentStartInstructions[0].shippingStep.shippingServiceCode`（待 §3-3） |
-| `sale_date` / `paid_on_date` | `creationDate` / `paymentSummary.payments[].paymentDate`（待核） |
-| `orders.postage_and_handling` | `pricingSummary.deliveryCost` |
-| `orders.discount` | `pricingSummary.priceDiscount`（样本里没有该字段，**待核**） |
-| `customers.*` | `shippingStep.shipTo`：`fullName`、`primaryPhone.phoneNumber`、`email`、`contactAddress.*`（`stateOrProvince`、`countryCode` 会被规则 21 的触发器再标准化） |
+| `order_transactions.sale_price` | `lineItemCost.value / quantity`，四舍五入到分。`lineItemCost` 是**行总额**（API 文档：单价 × 数量，折扣前）；历史数据存单价（15.99 × 2）。2026-11-14 已用真实多件单验证（见 §3） |
+| `order_transactions.postage_service` | `shippingServiceCode` 经 §1-3 映射 |
+| `sale_date` / `paid_on_date` | `creationDate` / 最早的 `paymentSummary.payments[].paymentDate` |
+| `orders.postage_and_handling` | `pricingSummary.deliveryCost − |deliveryDiscount|`（客户付给我们的；规则 25） |
+| `orders.discount` | `|pricingSummary.priceDiscount|`（eBay 写负数） |
+| `orders.comments` | `buyerCheckoutNotes` |
+| `orders.web_order_id` | **NULL**（历史 eBay 单全为 NULL） |
+| `customers.*` | `shipTo`：`fullName`、`primaryPhone.phoneNumber`、`email`（`@members.ebay.com` 中转地址，照存，**不参与匹配**）、`contactAddress.*`。`addressLine1/2` 去掉 `ebay:` 引用码后依次填 line1/line2（判断复用 `isReferenceCode()`，与出标签同口径） |
+
+**eBay 上没填 SKU 的款式**：多款式刊登里有的款式没有 SKU，API 就不返回 `sku`，导入后 `custom_label` 为空、订单上显示 Unresolved SKU，需人工确认。这与 Laravel 时期一致（刊登 `114917926815` 历史上就有 453 行空 SKU；近两年 eBay 行中 262 / 14,566 行为空）。根治办法是在 eBay 上给这些款式补 SKU，不是改导入。
+
+**匹配到历史客户时，其旧的 line3 引用码保留不动**（导入不写 line3，也不改已有客户的地址）。出标签时 `usableAddressLines()` 会过滤它。
+
+## 3. 验证
+
+- 单测：`npx vitest run src/lib/ebay src/lib/shopify`
+- 函数（2026-11-14，事务内建函数 + 4 张真实单，ROLLBACK）：新建、重复、同买家第二张 eBay 单合并（累加运费、清空 `address_verified_at`）、同买家的 Shopify 单**不并**进 eBay 单但共用客户、Shopify 包装的字段与日志文本不变、去重按平台隔离、`platform='store'` 被拒、`authenticated` 调不了两个导入函数、`ebay_authorization_status()` 对 `authenticated` 可用且不含 token、`anon` 被拒
+- 多件（2026-11-14，真实订单，把行状态当作未发货走 mapper + 函数，ROLLBACK）：`02-15438-01972` 一行 3 件，lineItemCost 23.07 → 单价 7.69（与同 SKU 单买 1 件的价格一致，证实 lineItemCost 是行总额）；`17-15383-41231` 两行各 2 件、订单折扣 $10 → 单价 23.70，商品 94.80 − 折扣 10 + 运费 0 = 84.80，与 eBay `total` 一致
+- 端到端（2026-11-14，Trigger.dev dev）：Debug 导入 `20-15407-95810` → imported（订单 206029，SKU 已解析）；重跑 → duplicate。Shopify Task 回归：`G2B24769` → duplicate
+
+## 4. 换电脑接着做
+
+refresh token 存在**数据库**里，新电脑**不需要重新授权**。不在 git 里的：
+
+1. **`.env.local`**：eBay 相关 5 个变量 `EBAY_CLIENT_ID`、`EBAY_CLIENT_SECRET`、`EBAY_RUNAME`、`EBAY_VERIFICATION_TOKEN`、`EBAY_DELETION_ENDPOINT`。后两个同时存在于 Edge Function secrets 和 eBay 门户，**三处必须一致**
+2. **Supabase CLI 登录**：只有部署 Edge Function、改 secrets 或 `db push` 时需要，`npx supabase login`
+3. 读 `.env.local` 一律按规则 16，**严禁 source**
+4. 本地跑脚本时 jiti 不认 `@/`：`JITI_ALIAS='{"@/":"<repo>/src/"}' npx dotenv-cli -e .env.local -- npx jiti <file>.mts`
 
 ## 5. 以后要做（已确认，不在本期）
 

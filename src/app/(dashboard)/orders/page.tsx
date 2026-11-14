@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
 import { activeDebugValue } from "@/lib/queries/debug-settings"
+import { fetchEbayAuthorization } from "@/lib/queries/ebay-authorization"
 import {
   fetchOrderList,
   fetchOrderStatusCounts,
@@ -11,6 +12,7 @@ import { OrdersTable } from "@/components/orders/orders-table"
 import { OrdersFilters } from "./_components/orders-filters"
 import { OrdersStatusTabs } from "./_components/orders-status-tabs"
 import { ShopifyImportButton } from "./_components/shopify-import-button"
+import { EbayImportButton } from "@/app/(dashboard)/orders/_components/ebay-import-button"
 
 export default async function OrdersPage({
   searchParams,
@@ -22,11 +24,13 @@ export default async function OrdersPage({
 
   const supabase = await createClient()
 
-  const [list, statusCounts, shopifyDebug] = await Promise.all([
+  const [list, statusCounts, shopifyDebug, ebayDebug, ebayAuthorization] = await Promise.all([
     fetchOrderList(supabase, filters),
     fetchOrderStatusCounts(supabase),
-    // Only the button's label. The action reads it again when the import starts.
+    // Only the buttons' labels. The actions read them again when an import starts.
     activeDebugValue(supabase, "shopify_import_test_order"),
+    activeDebugValue(supabase, "ebay_import_test_order"),
+    fetchEbayAuthorization(supabase),
   ])
 
   return (
@@ -40,7 +44,10 @@ export default async function OrdersPage({
             to see what was sold.
           </p>
         </div>
-        <ShopifyImportButton testOrder={shopifyDebug.value} />
+        <div className="flex flex-wrap items-start gap-2">
+          <EbayImportButton testOrder={ebayDebug.value} authorization={ebayAuthorization} />
+          <ShopifyImportButton testOrder={shopifyDebug.value} />
+        </div>
       </div>
 
       {/* A failed count costs the tabs their numbers, not their links, so it is

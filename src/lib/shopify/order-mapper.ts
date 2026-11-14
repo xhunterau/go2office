@@ -1,4 +1,12 @@
+import {
+  cleanText as clean,
+  toAmount,
+  UnimportableOrderError,
+} from "@/lib/order-import/import-orders"
 import type { ShopifyOrder } from "@/lib/shopify/orders"
+
+// Shared with the eBay mapper; re-exported so existing imports keep working.
+export { toAmount, UnimportableOrderError }
 
 // Shopify order -> the payload public.import_shopify_order(jsonb) takes.
 //
@@ -48,23 +56,6 @@ export type MapResult =
   | { kind: "skip"; reason: ShopifySkipReason }
 
 /**
- * Raised for an order that cannot be imported correctly. Counted as a failure
- * and reported by name, never imported in part.
- */
-export class UnimportableOrderError extends Error {}
-
-/** Shopify money strings ("10.98") to numbers. A blank is 0; garbage throws. */
-export function toAmount(value: string | null | undefined, field: string, orderName: string): number {
-  const trimmed = value?.trim() ?? ""
-  if (trimmed === "") return 0
-  const parsed = Number(trimmed)
-  if (!Number.isFinite(parsed)) {
-    throw new UnimportableOrderError(`${orderName}: ${field} is not a number (${JSON.stringify(value)})`)
-  }
-  return parsed
-}
-
-/**
  * Standard unless the shipping line says Express. The store's titles are not
  * consistent ("Standard", "Rate Table" seen on the same day) and all 25,567
  * historical Shopify lines say Standard, so anything not explicitly Express is
@@ -83,10 +74,6 @@ export function numericIdFromGid(gid: string): string {
   return tail
 }
 
-function clean(value: string | null | undefined): string | null {
-  const trimmed = value?.trim()
-  return trimmed ? trimmed : null
-}
 
 export function mapShopifyOrder(order: ShopifyOrder): MapResult {
   // Unshipped and cancelled is still "unshipped" to the search filter.

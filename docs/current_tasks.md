@@ -195,7 +195,7 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
 |---|---|
 | Job ID | `import-shopify-orders` |
 | 源文件 | [src/trigger/import-shopify-orders.ts](../src/trigger/import-shopify-orders.ts) |
-| 核心逻辑 | 拉取：[src/lib/shopify/orders.ts](../src/lib/shopify/orders.ts)；映射：[src/lib/shopify/order-mapper.ts](../src/lib/shopify/order-mapper.ts)；写库：SQL 函数 `public.import_shopify_order(jsonb, uuid)`（迁移 `20261111100000`） |
+| 核心逻辑 | 拉取：[src/lib/shopify/orders.ts](../src/lib/shopify/orders.ts)；映射：[src/lib/shopify/order-mapper.ts](../src/lib/shopify/order-mapper.ts)；逐单循环：[src/lib/order-import/import-orders.ts](../src/lib/order-import/import-orders.ts)（与 `import-ebay-orders` 共用）；写库：SQL 函数 `public.import_shopify_order(jsonb, uuid)`（迁移 `20261111100000`），自 `20261114130000` 起是 `import_platform_order('shopify', …)` 的薄包装，行为不变 |
 | `maxDuration` | 600 秒 |
 | `queue` | `concurrencyLimit: 1` |
 | `retry` | **`maxAttempts: 1`**：重跑本身是安全的（已导入的会被识别为重复），但会把第一次的失败藏起来 |
@@ -220,8 +220,11 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
   duplicates: number          // 已在 go2office（本导入或 Laravel 导入的）
   ignored: number             // 已取消 / 测试单 / 数量都被编辑成 0，不送进数据库
   failures: { name: string; reason: string }[]
+  notices: { name: string; reason: string }[]  // 值得人工看一眼的（Shopify 目前不产生）
 }
 ```
+
+类型是共用的 `OrderImportResult`（`src/lib/order-import/import-orders.ts`）。
 
 进度：`metadata.set("stage", "fetching" | "processing")` 与 `metadata.set("progress", { current, total })`，页面轮询读（`getShopifyImportStatus()`），共用 `use-batch-run-poll.ts` 与 `run-status.ts`。
 
@@ -250,3 +253,47 @@ Task 自己一行都不写，**全部经 `import_shopify_order()`，每张 Shopi
 
 拉到 12 张未发货订单（最早 2026-09-14）：10 张新建、1 张合并、1 张已取消被忽略、0 失败；1 行 SKU 解析不到（订单上显示 Unresolved SKU）。
 
+---
+
+## `import-ebay-orders`
+
+把卖家 `go2buy_au` 的 eBay **未发货订单**拉进 go2office，作为 `pending` 进入 Order Allocation。决策、映射与验证见 [docs/ebay-order-import.md](ebay-order-import.md)。
+
+| | |
+|---|---|
+| Job ID | `import-ebay-orders` |
+| 源文件 | [src/trigger/import-ebay-orders.ts](../src/trigger/import-ebay-orders.ts) |
+| 核心逻辑 | 授权：[src/lib/ebay/client.ts](../src/lib/ebay/client.ts) `loadEbayAccount`；拉取：[src/lib/ebay/orders.ts](../src/lib/ebay/orders.ts)；映射：[src/lib/ebay/order-mapper.ts](../src/lib/ebay/order-mapper.ts)；逐单循环：[src/lib/order-import/import-orders.ts](../src/lib/order-import/import-orders.ts)；写库：SQL 函数 `public.import_platform_order('ebay', jsonb, uuid)`（迁移 `20261114130000`，与 Shopify 共用） |
+| `maxDuration` | 600 秒 |
+| `queue` | `concurrencyLimit: 1` |
+| `retry` | **`maxAttempts: 1`**：同 `import-shopify-orders` |
+| 触发条件 | `/orders` 页头的 `Import from eBay` 按钮（`triggerEbayImport()`），只能手工触发。`/settings/debug` 的 `ebay_import_test_order` 开着时只导那一张（值为 eBay 订单号 `17-15414-28640`）；读开关失败则**不触发**。授权缺失 / 多账号 / 已过期时按钮被禁用 |
+
+### 入参 / 返回
+
+```ts
+// 入参
+{ userId?: string | null      // 写进 order_logs.user_id
+  testOrder?: string }        // 只导这一张，eBay 订单号；用 getOrders 的 orderIds=。已发货的单能拉到但会被计为 ignored
+
+// 返回：OrderImportResult，同 import-shopify-orders
+//   ignored  = 已取消 / 申请取消中 / 未付款 / 全部行已发货
+//   notices  = 取消与未付款的单（为什么没进来），以及没有映射的 postage service（照存）
+```
+
+### 它会写哪些表
+
+与 `import-shopify-orders` 完全相同（同一个 SQL 函数），差别只在数据：`orders.platform = 'ebay'`、`web_order_id` 为 NULL、`order_transactions.item_number` = 刊登号；去重与合并都限定 `platform = 'ebay'`，**不会并进 Shopify 单**。
+
+### 环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | `ebay_accounts` 无策略、`import_platform_order` 对 `anon` / `authenticated` 撤销了 EXECUTE，只能用 service role |
+| `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` | 用 refresh token 换 access token。refresh token 本身在 `ebay_accounts` 里，不是环境变量 |
+
+**⚠️ 部署前页面按钮跑不起来**：应用的 `TRIGGER_SECRET_KEY` 是 staging（见文首），staging 当前部署版本里没有这个 Task，run 会停在 `PENDING_VERSION`。需要 `npx trigger.dev deploy`，并在 Trigger.dev 控制台（staging）配上面两个 eBay 变量。
+
+### 实测（2026-11-14，Trigger.dev **dev** 环境）
+
+Debug 导入 `20-15407-95810` → fetched 1 / imported 1（订单 206029，SKU 解析成功）；重跑 → duplicates 1。
