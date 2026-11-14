@@ -23,7 +23,17 @@ import { ShippingMethodSelect } from "./shipping-method-select"
 
 // Who, how and how much -- the three questions asked of an order before anyone
 // looks at its lines (docs/orders-ui.md 6.2).
-export function OrderSummaryCards({ order }: { order: OrderDetail }) {
+//
+// `platformOrderNumbers` comes from the lines (lib/orders/platform-order-number)
+// because the number is stored per line: a merged order lists every Shopify
+// order it absorbed.
+export function OrderSummaryCards({
+  order,
+  platformOrderNumbers,
+}: {
+  order: OrderDetail
+  platformOrderNumbers: string[]
+}) {
   const customer = order.customers
   const metrics = order.metrics
 
@@ -162,6 +172,20 @@ export function OrderSummaryCards({ order }: { order: OrderDetail }) {
             )}
           </Field>
           <Field label="Dispatched">{formatDate(order.posted_on_date)}</Field>
+          <Field label="Order no.">
+            {platformOrderNumbers.length > 0 ? (
+              <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
+                {platformOrderNumbers.map((number) => (
+                  <span key={number} className="inline-flex items-center gap-1.5">
+                    {number}
+                    <CopyButton value={number} label="order number" />
+                  </span>
+                ))}
+              </span>
+            ) : (
+              "—"
+            )}
+          </Field>
           <Field label="Web order ID">{order.web_order_id ?? "—"}</Field>
         </CardContent>
       </Card>

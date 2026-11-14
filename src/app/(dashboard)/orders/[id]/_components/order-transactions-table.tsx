@@ -192,6 +192,14 @@ export function OrderTransactionsTable({
                             </Badge>
                           )}
                         </div>
+                        {/* Per line on purpose: an order merged from two
+                            Shopify orders holds lines from both, and this is
+                            the only place that says which is which. */}
+                        {transaction.sales_record_number?.trim() ? (
+                          <div className="mt-0.5 text-xs text-muted-foreground">
+                            {transaction.sales_record_number}
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {transaction.custom_label ?? "—"}

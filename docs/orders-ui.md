@@ -258,7 +258,7 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 
 **搜索（决策 3，五个维度）**
 
-不做"一个搜索框猜用户想搜什么"。五个维度的解析路径、索引需求、匹配语义都不同，混在一起意味着每次按键跑五路查询、还得猜哪路才是用户要的。改为**一个带维度选择器的搜索框**（`Invoice / Tracking / Customer / Suburb or postcode / SKU`），选中哪个就只跑哪一路。
+不做"一个搜索框猜用户想搜什么"。五个维度的解析路径、索引需求、匹配语义都不同，混在一起意味着每次按键跑五路查询、还得猜哪路才是用户要的。改为**一个带维度选择器的搜索框**（`Invoice / Order no. / Tracking / Customer / Suburb or postcode / SKU`，Order no. 为 2026-11-14 新增的第六维），选中哪个就只跑哪一路。
 
 | 维度 | 目标列 | 匹配 | 解析路径 |
 |---|---|---|---|
@@ -267,6 +267,11 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 | Customer | `customers.full_name` / `email` / `platform_user_id` | 模糊 | 嵌入过滤，§5.3 |
 | Suburb / postcode | `customers.city` / `postcode` | suburb 模糊、postcode 前缀 | 嵌入过滤，§5.3 |
 | SKU | `products.sku` | **精确** | 两跳，§5.3 |
+| Order no.（2026-11-14 加） | `order_transactions.sales_record_number` | **精确**，`#` 可带可不带、不分大小写 | 先解析成订单 id 再 `.in("id", …)`，见下 |
+
+> **Order no. 维度（2026-11-14）**：Shopify 订单号（`#G2B24769`）与 eBay 销售记录号（`324563`）都存在 `order_transactions.sales_record_number`，**按明细行存，不在 `orders` 上**——合并过的订单（[shopify-order-import.md](shopify-order-import.md) §3）一张单带着好几个 Shopify 单号，如 206017 = `#G2B24766` + `#G2B24767`。此前页面上哪里都不显示这一列，用户以为没存。
+>
+> 解析走「先查 `order_transactions` 拿 `order_id`，再 `.in("id", ids)`」，而**不是**客户维度那种 `!inner` 嵌入：精确单号只命中一两张单，不存在上文说的 IN 列表撑爆问题；而 `!inner` 会把一张单按命中行数重复。索引是迁移 `20261114110000` 新建的 btree（此前该列无索引）。候选值由 `orderNumberCandidates()`（[src/lib/orders/platform-order-number.ts](../src/lib/orders/platform-order-number.ts)）生成：去掉前导 `#`、转大写，再与 `#` 前缀各查一次。详情页摘要卡片中 Web order ID 上方的「Order no.」行与明细表每行标题下方显示同一列（`platformOrderNumbers()` 去重、去空——1,357 行迁移数据是空串）。
 
 ### 5.3 三条跨表搜索路径的实现
 

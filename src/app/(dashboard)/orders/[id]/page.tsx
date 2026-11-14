@@ -6,6 +6,7 @@ import {
   fetchOrderTransactionsWithItems,
 } from "@/lib/queries/orders"
 import { fetchLatestShippingQuotes } from "@/lib/queries/shipping-quotes"
+import { platformOrderNumbers } from "@/lib/orders/platform-order-number"
 import { OrderDetailHeader } from "./_components/order-detail-header"
 import { OrderSummaryCards } from "./_components/order-summary-cards"
 import { OrderTransactionsTable } from "./_components/order-transactions-table"
@@ -46,7 +47,10 @@ export default async function OrderDetailPage({
     <div className="flex flex-1 flex-col gap-6">
       <OrderDetailHeader order={detail.order} />
 
-      <OrderSummaryCards order={detail.order} />
+      <OrderSummaryCards
+        order={detail.order}
+        platformOrderNumbers={platformOrderNumbers(lines.transactions)}
+      />
 
       {lines.error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive">

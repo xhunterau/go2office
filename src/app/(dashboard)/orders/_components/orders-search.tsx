@@ -18,6 +18,7 @@ const DEFAULT_FIELD: SearchField = "invoice"
 
 const FIELD_LABELS: Record<SearchField, string> = {
   invoice: "Invoice",
+  order_no: "Order no.",
   tracking: "Tracking",
   customer: "Customer",
   // "Suburb" is customers.city in the database (docs/orders-ui.md 4.1). The
@@ -29,6 +30,9 @@ const FIELD_LABELS: Record<SearchField, string> = {
 
 const PLACEHOLDERS: Record<SearchField, string> = {
   invoice: "Invoice number",
+  // Exact, like SKU: the Shopify order name (with or without #) or the eBay
+  // sales record number (lib/orders/platform-order-number.ts).
+  order_no: "Shopify #G2B24769 or eBay record no.",
   tracking: "Tracking number",
   customer: "Name, email or eBay username",
   location: "Suburb or postcode",

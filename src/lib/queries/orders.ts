@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { Database } from "@/lib/supabase/database.types"
+import { orderNumberCandidates } from "@/lib/orders/platform-order-number"
 import {
   dateParam,
   enumParam,
@@ -66,6 +67,9 @@ export const SALES_PLATFORMS = [
 // keystroke and guessing which one the user meant.
 export const SEARCH_FIELDS = [
   "invoice",
+  // The platform's own order number (Shopify #G2B24769, eBay sales record),
+  // order_transactions.sales_record_number. See lib/orders/platform-order-number.
+  "order_no",
   "tracking",
   "customer",
   "location",
@@ -294,6 +298,29 @@ export async function fetchOrderList(
     skuProductId = data.id
   }
 
+  // The order number lives on order_transactions, one per line, and a merged
+  // order holds several. Resolved to order ids first, against the btree index
+  // on sales_record_number (migration 20261114110000), then applied as an id
+  // filter -- the same two-step shape as the SKU search, and no !inner embed
+  // to turn one order into a row per matching line.
+  let orderNoIds: number[] | null = null
+  if (term !== null && filters.searchField === "order_no") {
+    const candidates = orderNumberCandidates(term)
+    if (candidates.length === 0) return { ...EMPTY, error: null }
+
+    const { data, error } = await supabase
+      .from("order_transactions")
+      .select("order_id")
+      .in("sales_record_number", candidates)
+      // An exact order number names one order, two when Laravel imported a
+      // Shopify order twice. The cap only guards against a pathological value.
+      .limit(500)
+
+    if (error) return { ...EMPTY, error: error.message }
+    orderNoIds = [...new Set((data ?? []).map((row) => row.order_id))]
+    if (orderNoIds.length === 0) return { ...EMPTY, error: null }
+  }
+
   // count: "estimated" rather than the exact count the products and inventory
   // lists use. Exact counting means a full COUNT(*) over 203315 rows on every
   // page change; estimated reads pg_class.reltuples and falls back to an exact
@@ -351,6 +378,9 @@ export async function fetchOrderList(
     switch (filters.searchField) {
       case "invoice":
         query = query.ilike("invoice_number", like)
+        break
+      case "order_no":
+        query = query.in("id", orderNoIds as number[])
         break
       case "tracking":
         query = query.ilike("tracking_number", like)
@@ -578,6 +608,9 @@ export type OrderTransaction = {
   sale_price: number
   sale_date: string
   postage_service: string | null
+  // The platform order number: Shopify "#G2B24769", eBay sales record. Per
+  // line, because a merged order holds lines from several platform orders.
+  sales_record_number: string | null
   order_id_ebay: string | null
   transaction_id_ebay: string | null
   items: OrderPickedItem[]
@@ -607,7 +640,8 @@ export async function fetchOrderTransactionsWithItems(
     .from("order_transactions")
     .select(
       `id, item_title, item_number, custom_label, quantity, sale_price,
-       sale_date, postage_service, order_id_ebay, transaction_id_ebay,
+       sale_date, postage_service, sales_record_number, order_id_ebay,
+       transaction_id_ebay,
        order_items(
          id, product_id, sku_snapshot, quantity, location_id, is_auto_generated,
          products(name, image_url), locations(name)
@@ -693,6 +727,7 @@ export async function fetchOrderTransactionsWithItems(
       sale_price: t.sale_price,
       sale_date: t.sale_date,
       postage_service: t.postage_service,
+      sales_record_number: t.sales_record_number,
       order_id_ebay: t.order_id_ebay,
       transaction_id_ebay: t.transaction_id_ebay,
       items,
