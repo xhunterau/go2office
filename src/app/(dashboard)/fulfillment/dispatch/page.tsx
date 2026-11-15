@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { redirect } from "next/navigation"
 
 import { Badge } from "@/components/ui/badge"
 import {
@@ -30,6 +31,15 @@ export default async function DispatchPage({
     countDispatchQueue(supabase),
     term ? searchDispatchQueue(supabase, term) : Promise.resolve(null),
   ])
+
+  // A single match is the parcel in front of the operator (a scanned invoice
+  // number almost always is), so open it instead of making them click through.
+  // Server-side, so the result table never flashes; the redirect replaces the
+  // ?q= history entry, and the detail page links back without q, so Back does
+  // not bounce into it again.
+  if (results && !results.error && results.rows.length === 1) {
+    redirect(`/fulfillment/dispatch/${results.rows[0].id}`)
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-4">

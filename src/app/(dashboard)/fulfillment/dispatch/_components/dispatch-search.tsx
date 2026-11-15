@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input"
  * does not list the queue, so the operator opens the order whose parcel is in
  * front of them, found by the invoice number on the slip or the name on the
  * label. Focused on load so a barcode scanner can type straight into it.
+ * A search with exactly one match opens that order directly (page.tsx);
+ * only several matches show the result table to choose from.
  */
 export function DispatchSearch({ initialTerm }: { initialTerm: string }) {
   const router = useRouter()
