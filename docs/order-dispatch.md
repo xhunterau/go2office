@@ -112,11 +112,64 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 | `clearZeroInventory` | `/inventory` 已经有 `purgeZeroStockLevels` |
 | `send-dispatch-notification-email` / `update-neto-order-tracking` | 决策 9；也没有 Neto |
 
-## 5. 下一阶段
+## 5. 下一阶段：运单号回写 Shopify / eBay（设计稿，2026-11-15，未动工）
 
-- Shopify：发货后创建 fulfillment，把运单号写回去。
-- eBay：`POST /sell/fulfillment/v1/order/{orderId}/shipping_fulfillment`。合并订单（一张 go2office 订单里有多个 `order_id_ebay`）要对每个 eBay 订单分别回写。
-- 发货通知邮件。
+> 状态：**方案已出、代码一行未写**。§5.6 的 4 个决策点用户尚未回复，动工前先确认。
+
+### 5.1 已具备的前提（不用再做）
+
+| 项 | 现状 |
+|---|---|
+| Shopify 平台订单 id | `order_transactions.order_id_ebay` = `legacyResourceId`；`transaction_id_ebay` = line item gid 数字尾巴（`docs/shopify-order-import.md`） |
+| eBay 平台订单 id | 同一列 = eBay 订单号（`17-15414-28640`） |
+| 合并单 | 同买家同平台的多张单会并进一张 go2office 订单，所以**一张订单可能对应多个平台订单 id**，每个都要单独回写（取 `DISTINCT order_id_ebay`） |
+| Shopify 权限 | app 已有 `write_merchant_managed_fulfillment_orders`（预留给回写的），只是还没实际调用验证过 |
+| eBay 权限 | 已授权 `sell.fulfillment`，无需重新授权（`docs/ebay-order-import.md` §5） |
+| 客户端 | `src/lib/shopify/client.ts` 的 `shopifyQuery`；`src/lib/ebay/client.ts` 目前只有 `ebayGet`，**要补一个 POST** |
+
+### 5.2 核心设计：发货事务内写待办表 → 后台任务异步推送
+
+1. **新表 `platform_fulfillment_syncs`**：每个「go2office 订单 × 平台订单 id」一行。字段：`order_id`、`platform`、`platform_order_id`、`tracking_number`、`status`（`pending` / `succeeded` / `failed` / `skipped`）、`attempts`、`last_error`、`platform_fulfillment_id`、时间戳。唯一键 `(order_id, platform_order_id)`。
+   - **由 `dispatch_order()` 在同一事务里插入**。发货成功就必有待办，不会「发了货忘了回写」；规则 26 的「同一函数、同一事务」继续成立。平台 API 慢或失败不卡发货、不回滚库存。
+   - `dispatch_order()` 是 SECURITY INVOKER，要给 `authenticated` 加 **INSERT 策略**（规则 22：只有 SELECT 策略的表写不进去，`order_logs` 吃过这个亏）。Task 用 service role 更新状态。
+   - 需同步：迁移（带 `BEGIN/COMMIT`）、`database.types.ts` 手工补条目（规则 18）、`docs/existing_*`。
+2. **Trigger.dev Task `push-platform-fulfillment`**（入参：go2office order id）：发货 Server Action 成功后立即 trigger。另加一个 **schedules 定时任务**（约每 15 分钟）扫 `pending` / `failed` 补推，兜住 trigger 调用本身失败的情况。
+   - **推送前先查平台现状 → 幂等，可以重试**。这与 Aramex 下单（规则 24，`maxAttempts` 必须为 1）**不同**，不要照抄那边的限制，也不要因为这里能重试就反过来放宽 Aramex。
+   - 单张订单内的多个平台订单**串行**处理，不 `Promise.all`。
+   - 写完同步更新 `docs/current_tasks.md`。
+3. **Shopify**（新文件 `src/lib/shopify/fulfillment.ts`）：查 `order(id).fulfillmentOrders`，取状态 OPEN / IN_PROGRESS 的 → `fulfillmentCreate` 整单发货，带 `trackingInfo { number, company, url }`。已无未发货的 fulfillment order → 记 `skipped`（已在 Laravel / Shopify 后台发过）。
+4. **eBay**（新文件 `src/lib/ebay/fulfillment.ts`）：先 `GET /sell/fulfillment/v1/order/{id}/shipping_fulfillment`，已有同运单号 → `skipped`；否则 `POST .../shipping_fulfillment`，带 `lineItems`、`shippedDate`（= `posted_on_date`）、`shippingCarrierCode`、`trackingNumber`。**`lineItems` 实时从 eBay 拉订单取**，不用本地 `order_items`——本地明细可能被 `rebuild_order_items` 重建过，对不上。
+5. **承运商映射 `src/lib/fulfillment/platform-carriers.ts`**：`shipping_method` → Shopify company 名 + 追踪 URL、eBay carrier code。照规则 24：键类型收窄 + 穷尽性检查，缺键抛错，**严禁 `?? 默认值`**——否则运单号挂到错误承运商下，买家点开查不到，且不报错。**两个平台接受的承运商取值必须查官方文档核实，不凭记忆写。**
+6. **页面**：订单详情页显示每个平台订单的回写状态与错误，带 `Retry`；发货搜索页显示「N failed syncs」入口，否则失败只是一行没人看的记录。
+
+### 5.3 边界情况
+
+- 平台上订单已取消 / 已退款 → 记 `failed` 并展示错误，人工处理，不自动重试到天荒地老（`attempts` 设上限）。
+- 订单里手工加的明细行没有平台 id → 不影响：按 `DISTINCT order_id_ebay` 推整单。
+- 重复运单号（`GO001` 确认放行的同包裹多单）→ 各自正常回写同一个运单号。
+- 迁移进来的 20 万张历史订单**永远不推**：待办行只由 `dispatch_order()` 产生。
+
+### 5.4 实施顺序建议
+
+1. 迁移：建表 + RLS + 改 `dispatch_order()` 插待办 → 事务内场景测试后回滚，再推送。
+2. `platform-carriers.ts` + 单测（穷尽性）。
+3. Shopify / eBay 两个 `fulfillment.ts` + 单测（mock HTTP，覆盖幂等跳过分支）。
+4. Task + 定时任务 + `docs/current_tasks.md`。
+5. 页面状态与 Retry。
+6. 各拿**一张真实单**在 staging 跑通（Trigger.dev 用 staging 环境查 run）。
+
+### 5.5 发货通知邮件
+
+取决于 §5.6 决策 1：Shopify 打开 `notifyCustomer` 则 Shopify 单由平台发邮件；eBay 平台自己会通知买家。`store` / `backorder` 单是否需要自建邮件，另议。
+
+### 5.6 待用户确认（2026-11-15 提出，未回复）
+
+| # | 问题 | 默认建议 |
+|---|---|---|
+| 1 | Shopify `fulfillmentCreate` 是否 `notifyCustomer` | 打开（顺便解决 Shopify 单的发货通知邮件） |
+| 2 | Laravel 并行期间，Laravel 发的单由谁回写 | Laravel 自己回写；go2office 只推自己发的单（幂等检查防重复，但防不了 Laravel 漏推） |
+| 3 | 发货后改运单号是否自动更新平台 | 本期不做，只手动 Retry（eBay 不能改已有 shipping fulfillment，只能新建） |
+| 4 | `store` / `backorder` 平台订单 | 不写待办行，不处理 |
 
 ## 6. 交接与待测清单（2026-11-14 收工时）
 
@@ -142,4 +195,4 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 
 **注意**：Laravel 与 go2office 并行期间，同一张单只能在一个系统里发货，否则库存会扣两次。
 
-**下一阶段**：见 §5（Shopify / eBay 运单号回写、发货通知邮件）。
+**下一阶段**：见 §5（Shopify / eBay 运单号回写、发货通知邮件）。2026-11-15 已出设计稿，未写代码；换机后先读 §5.6 的 4 个待确认决策，确认后按 §5.4 顺序动工。

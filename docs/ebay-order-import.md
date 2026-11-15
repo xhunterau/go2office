@@ -82,5 +82,5 @@ refresh token 存在**数据库**里，新电脑**不需要重新授权**。不�
 
 ## 5. 以后要做（已确认，不在本期）
 
-- **运单号回写 eBay**：`POST /sell/fulfillment/v1/order/{orderId}/shipping_fulfillment`。scope 已授权，无需再授权。合并单要对**每个** `order_id_ebay` 各回写一次
+- **运单号回写 eBay**：`POST /sell/fulfillment/v1/order/{orderId}/shipping_fulfillment`。scope 已授权，无需再授权。合并单要对**每个** `order_id_ebay` 各回写一次。设计稿见 [order-dispatch.md](order-dispatch.md) §5
 - **按删号通知匿名化客户数据**：`ebay_account_deletions.processed_at` 预留；动手前必须向 eBay 核实（endpoint 未校验签名）
