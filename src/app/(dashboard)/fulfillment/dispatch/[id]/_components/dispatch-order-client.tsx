@@ -164,6 +164,7 @@ export function DispatchOrderClient({
       toast.success(`${order.invoice_number} dispatched`, {
         description: `Tracking number ${result.data?.trackingNumber ?? trackingNumber}`,
       })
+      if (result.data?.syncWarning) toast.warning(result.data.syncWarning)
       router.push("/fulfillment/dispatch")
     })
   }

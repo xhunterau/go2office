@@ -180,3 +180,15 @@
 - **扣库存只能经过 `record_stock_movement`**，严禁直接 `UPDATE inventory_levels`。短缺要先在行锁下一次全部列出（`GO002`），不能靠非负约束报一条看不懂的 `23514`。库存不够时，发货页只提供修正入口（复用 `StockMovementDialog`），**严禁在发货流程里自动盘点去「凑够」数量**。
 - **运单号先归一化再查重**：比较前必须先 `normalize_tracking_number()`（规则 20），否则扫出来的整串 GS1-128 条码永远查不到重复。重复运单号是 `GO001` 加确认框，不是直接拦死：Shopify 和 eBay 的单按决策不合并，但可能装在同一个包裹里发出。
 - **`p_picks` 必须覆盖订单的每个 `order_items` 行、每行恰好一次**：明细行会被 `rebuild_order_items` 重建、换成新 id，对不上说明页面已过期，函数直接拒绝，严禁改成「按 SKU 猜着对上」。
+
+# 27. 运单号回写 Shopify / eBay（platform_fulfillment_syncs）
+- **范围**：`dispatch_order()` 在发货事务内为每个平台订单插一行 `platform_fulfillment_syncs`（`pending`）；`push-platform-fulfillment`（发货后立即触发）与 `sweep-platform-fulfillment`（每 15 分钟）两个 Task 在 service role 下推送并记录结果。详见 `docs/order-dispatch.md` §5。
+- **待办行必须在发货事务里写，推送必须在事务外**：前者保证发了货就一定有待办（规则 26），后者保证平台慢或报错不会卡住发货或回滚库存。严禁把平台 API 调用挪进 `dispatch_order()` 或 `dispatchOrder` 的成功判定里。
+- **承运商映射缺值必须抛错，严禁 `?? 默认值`**：`platform-carriers.ts` 的 `METHOD_CARRIER` 是覆盖整个 `shipping_method` 枚举的 `Record`，新增枚举值不配就编译失败。挂错承运商时两个平台都照收，买家点追踪链接查不到，**不报任何错**。Shopify 公司名区分大小写，必须逐字取自其官方列表。
+- **`EBAY_CARRIER_CODE.aramex` 是刻意的 `null`**：eBay 官方枚举里找到的 `ARAMEX` 没有标注澳洲站可用，等用户在 Seller Hub 确认后再填。严禁凭记忆补一个值。
+- **发票号不是运单号**：Letter 和部分历史订单的运单号栏填的是发票号，`resolveShipment()` 把这种情况当作「只标记已发货」。严禁把发票号作为 tracking number 发给买家。
+- **推送前先读平台现状，这是可以重试的唯一前提**：`planShopifyFulfillment` / `planEbayFulfillment` 发现已有同一运单号就返回 `already`。正因为如此，这里的 `retry` 可以放宽、Retry 按钮可以反复点；**`submit-aramex-batch` 的 `maxAttempts: 1` 不因此放宽**（规则 24）。
+- **两个 Task 共用 `platform-fulfillment` 队列（`concurrencyLimit: 1`）**：先读后写的检查只有在同一张单不被并发推送时才成立。严禁给其中一个改用别的队列。
+- **`queuePlatformFulfillment` 不可放进 `"use server"` 文件**：它接收 `userId` 参数，`"use server"` 文件的每个导出都能从浏览器调用，放进去等于让任何人以他人名义写日志。
+- **`authenticated` 对这张表只有 SELECT 和「只能插 pending 新行」的 INSERT 策略**：结果列只由 service role 写。Retry 是去触发 Task，不是去改行——不要为了 Retry 补 UPDATE 策略。
+

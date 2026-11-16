@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 
 import type { ActionResult } from "@/lib/actions/action-result"
+import { queuePlatformFulfillment } from "@/lib/fulfillment/queue-platform-fulfillment"
 import { createClient } from "@/lib/supabase/server"
 import { dispatchOrderSchema } from "@/lib/validations/dispatch"
 
@@ -18,6 +19,12 @@ export type DispatchOutcome = {
    * allow_shared_tracking.
    */
   sharedWith?: string
+  /**
+   * Set when the order shipped but the Shopify / eBay update could not be
+   * started. The sweep will push it within 15 minutes, so this is a notice,
+   * not a failure: the dispatch itself is done.
+   */
+  syncWarning?: string
 }
 
 /**
@@ -65,5 +72,17 @@ export async function dispatchOrder(input: unknown): Promise<ActionResult<Dispat
   revalidatePath("/inventory")
   revalidatePath("/products", "layout")
 
-  return { success: true, data: { trackingNumber } }
+  // After the dispatch has committed, and outside it: the to-do rows are
+  // already written, so a failure here only delays the push to the sweep.
+  const sync = await queuePlatformFulfillment({ orderId: data.order_id, userId: user.id })
+
+  return {
+    success: true,
+    data: {
+      trackingNumber,
+      syncWarning: sync.success
+        ? undefined
+        : "Shopify / eBay could not be updated right now; it will be retried within 15 minutes.",
+    },
+  }
 }

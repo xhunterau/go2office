@@ -5,11 +5,13 @@ import {
   fetchOrderDetail,
   fetchOrderTransactionsWithItems,
 } from "@/lib/queries/orders"
+import { fetchPlatformSyncs } from "@/lib/queries/platform-fulfillment"
 import { fetchLatestShippingQuotes } from "@/lib/queries/shipping-quotes"
 import { platformOrderNumbers } from "@/lib/orders/platform-order-number"
 import { OrderDetailHeader } from "./_components/order-detail-header"
 import { OrderSummaryCards } from "./_components/order-summary-cards"
 import { OrderTransactionsTable } from "./_components/order-transactions-table"
+import { PlatformSyncPanel } from "./_components/platform-sync-panel"
 import { ShippingQuotesPanel } from "./_components/shipping-quotes-panel"
 
 export default async function OrderDetailPage({
@@ -27,10 +29,11 @@ export default async function OrderDetailPage({
   // handful of picked lines (250687 items over 203315 orders), so a second
   // round trip per expansion would cost more than fetching them all
   // (docs/orders-ui.md 6.1).
-  const [detail, lines, quotes] = await Promise.all([
+  const [detail, lines, quotes, syncs] = await Promise.all([
     fetchOrderDetail(supabase, orderId),
     fetchOrderTransactionsWithItems(supabase, orderId),
     fetchLatestShippingQuotes(supabase, orderId),
+    fetchPlatformSyncs(supabase, orderId),
   ])
 
   if (detail.error) {
@@ -62,6 +65,19 @@ export default async function OrderDetailPage({
           transactions={lines.transactions}
         />
       )}
+
+      {syncs.error ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          Failed to load the Shopify / eBay update status: {syncs.error}
+        </div>
+      ) : syncs.syncs.length > 0 ? (
+        <PlatformSyncPanel
+          orderId={detail.order.id}
+          syncs={syncs.syncs}
+          orderTrackingNumber={detail.order.tracking_number}
+          canRetry={detail.order.status === "completed"}
+        />
+      ) : null}
 
       {/* A quote failure is not a reason to hide the panel: the button that
           fixes it lives inside. The batch just comes back empty. */}

@@ -1042,6 +1042,66 @@ export type Database = {
           },
         ]
       }
+      // Tracking number write-back to-dos (migration 20261116100000). Inserted
+      // by dispatch_order(), one per platform order; the outcome columns are
+      // written only by push-platform-fulfillment under the service role.
+      // tracking_number NULL on a succeeded row = marked shipped with no number.
+      platform_fulfillment_syncs: {
+        Row: {
+          id: number
+          order_id: number
+          platform: Database["public"]["Enums"]["sales_platform"]
+          platform_order_id: string
+          status: Database["public"]["Enums"]["platform_sync_status"]
+          tracking_number: string | null
+          carrier: string | null
+          platform_fulfillment_id: string | null
+          attempts: number
+          last_error: string | null
+          synced_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          order_id: number
+          platform: Database["public"]["Enums"]["sales_platform"]
+          platform_order_id: string
+          status?: Database["public"]["Enums"]["platform_sync_status"]
+          tracking_number?: string | null
+          carrier?: string | null
+          platform_fulfillment_id?: string | null
+          attempts?: number
+          last_error?: string | null
+          synced_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          order_id?: number
+          platform?: Database["public"]["Enums"]["sales_platform"]
+          platform_order_id?: string
+          status?: Database["public"]["Enums"]["platform_sync_status"]
+          tracking_number?: string | null
+          carrier?: string | null
+          platform_fulfillment_id?: string | null
+          attempts?: number
+          last_error?: string | null
+          synced_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_fulfillment_syncs_order_id_fkey"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           id: number
@@ -1799,6 +1859,7 @@ export type Database = {
         | "completed"
         | "cancelled"
       sales_platform: "ebay" | "shopify" | "backorder" | "store"
+      platform_sync_status: "pending" | "succeeded" | "failed" | "skipped"
       // PascalCase_Snake by design: these are the labels the business supplied.
       // The inconsistency with the lowercase enums above is known and accepted
       // (docs/orders-domain-migration.md section 4.1).

@@ -14,6 +14,7 @@ import { formatDate } from "@/lib/format"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { countDispatchQueue, searchDispatchQueue } from "@/lib/queries/dispatch"
+import { fetchFailedSyncOrders } from "@/lib/queries/platform-fulfillment"
 import { textParam } from "@/lib/queries/search-params"
 import { createClient } from "@/lib/supabase/server"
 
@@ -27,9 +28,10 @@ export default async function DispatchPage({
   const term = textParam(await searchParams, "q")
   const supabase = await createClient()
 
-  const [queue, results] = await Promise.all([
+  const [queue, results, failedSyncs] = await Promise.all([
     countDispatchQueue(supabase),
     term ? searchDispatchQueue(supabase, term) : Promise.resolve(null),
+    fetchFailedSyncOrders(supabase),
   ])
 
   // A single match is the parcel in front of the operator (a scanned invoice
@@ -58,6 +60,30 @@ export default async function DispatchPage({
       </div>
 
       <DispatchSearch initialTerm={term ?? ""} />
+
+      {/* Here rather than only on the order page: nobody opens a completed
+          order to check whether its platform update went through. */}
+      {failedSyncs.total > 0 ? (
+        <div className="flex flex-col gap-2 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm">
+          <p className="font-medium text-foreground">
+            {failedSyncs.total} Shopify / eBay {failedSyncs.total === 1 ? "update" : "updates"} failed.
+            Open the order to see why and retry.
+          </p>
+          <ul className="flex flex-col gap-1">
+            {failedSyncs.orders.map((row) => (
+              <li key={row.order_id} className="flex flex-wrap gap-x-2">
+                <Link
+                  href={`/orders/${row.order_id}`}
+                  className="font-mono font-medium text-foreground underline underline-offset-4"
+                >
+                  {row.invoice_number}
+                </Link>
+                <span className="text-muted-foreground">{row.last_error}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {results?.error ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm">

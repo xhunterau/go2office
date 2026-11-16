@@ -297,3 +297,69 @@ Task 自己一行都不写，**全部经 `import_shopify_order()`，每张 Shopi
 ### 实测（2026-11-14，Trigger.dev **dev** 环境）
 
 Debug 导入 `20-15407-95810` → fetched 1 / imported 1（订单 206029，SKU 解析成功）；重跑 → duplicates 1。
+
+---
+
+## `push-platform-fulfillment`
+
+发货后把运单号回写到 Shopify / eBay，并在 `platform_fulfillment_syncs` 记录结果。设计见 [order-dispatch.md](order-dispatch.md) §5。
+
+| | |
+|---|---|
+| Job ID | `push-platform-fulfillment` |
+| 源文件 | [src/trigger/push-platform-fulfillment.ts](../src/trigger/push-platform-fulfillment.ts) |
+| 核心逻辑 | [src/lib/fulfillment/platform-sync.ts](../src/lib/fulfillment/platform-sync.ts) 的 `syncOrderFulfillments()`；平台适配器 `src/lib/shopify/fulfillment.ts`、`src/lib/ebay/fulfillment.ts`；承运商映射 `src/lib/fulfillment/platform-carriers.ts` |
+| 队列 | `platform-fulfillment`，`concurrencyLimit: 1`，与 `sweep-platform-fulfillment` **共用**，保证同一张单不会被两个 run 同时推送 |
+| `retry` | `maxAttempts: 1`。失败记在行上，由 sweep 重试。**与 Aramex 下单不同，这里重复执行是安全的**：每次推送前都先读平台现状，已有同一运单号就记 `already`。不要因此放宽 `submit-aramex-batch` 的限制 |
+| 触发条件 | ① `dispatchOrder()` 在 `dispatch_order()` 提交之后触发（触发失败只给 warning，发货不回滚）；② 订单详情页 `Shopify / eBay update` 面板的 `Retry` 按钮（`retryPlatformFulfillment()`，`manual: true`） |
+
+### 入参
+
+```ts
+{ orderId: number          // public.orders.id
+  userId?: string | null   // 写进 order_logs.user_id
+  manual?: boolean }       // Retry：额外重推 skipped 行、超过自动重试上限的 failed 行、发货后运单号已改的 succeeded 行
+```
+
+### 它会写哪些表
+
+| 表 | 写入内容 |
+|---|---|
+| `platform_fulfillment_syncs` | 每个被推送的行：`status`、`attempts + 1`、`last_error`、`tracking_number`（平台上现在的号；NULL 表示「只标记已发货」）、`carrier`、`platform_fulfillment_id`、`synced_at` |
+| `order_logs` | 每个被推送的行一条（`user_id` = 入参，sweep 为 NULL）。写失败只打 warning：行本身已记录 |
+
+**订单状态不是 `completed` 时什么都不推**（例如被改回 `labelled` 准备重发）。
+
+### 对外部平台的写操作
+
+| 平台 | 调用 | 说明 |
+|---|---|---|
+| Shopify | `fulfillmentCreate`（`notifyCustomer: false`）/ `fulfillmentTrackingInfoUpdate` | 后者只在 Retry 且运单号已改时使用，改的是我们自己建的那个 fulfillment |
+| eBay | `POST /sell/fulfillment/v1/order/{id}/shipping_fulfillment` | 运单号已改时**新建**一个（eBay 不能编辑已有的） |
+
+### 环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | 结果列对 `authenticated` 没有写策略；`ebay_accounts` 无策略 |
+| `SHOPIFY_STORE_DOMAIN` / `SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET` / `SHOPIFY_API_VERSION` | 同 `import-shopify-orders`；scope 里的 `write_merchant_managed_fulfillment_orders` 就是为这里预留的 |
+| `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` | 同 `import-ebay-orders`；`sell.fulfillment` 已授权，无需重新授权 |
+
+---
+
+## `sweep-platform-fulfillment`（定时任务）
+
+每 15 分钟补推 `push-platform-fulfillment` 漏掉的：触发本身失败、平台暂时不可用、或失败但还有重试次数。
+
+| | |
+|---|---|
+| Job ID | `sweep-platform-fulfillment` |
+| 源文件 | 同上 |
+| cron | `*/15 * * * *`，**只在 STAGING / PRODUCTION**。本地 `trigger dev` 不跑，避免从笔记本推真实订单 |
+| 队列 | 与 `push-platform-fulfillment` 共用 `platform-fulfillment` |
+| 挑选条件 | `findOrdersToSweep()`：`status = 'pending'`，或 `status = 'failed' AND attempts < 3`；且 `updated_at` 早于 5 分钟前（刚发货的单留给它自己的触发）；订单须为 `completed`。每次最多 50 行 |
+| 返回 | `{ orders, failedRows, errors }`。单张订单的记账失败不会中断其余订单 |
+
+失败 3 次后不再自动重试，留在 `/fulfillment/dispatch` 页的「Shopify / eBay updates failed」列表里，由人点 Retry。
+
+**⚠️ 两个 Task 都需要 `npx trigger.dev deploy` 到 staging 后才会运行**（见文首）。

@@ -112,9 +112,9 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 | `clearZeroInventory` | `/inventory` 已经有 `purgeZeroStockLevels` |
 | `send-dispatch-notification-email` / `update-neto-order-tracking` | 决策 9；也没有 Neto |
 
-## 5. 下一阶段：运单号回写 Shopify / eBay（设计稿，2026-11-15，未动工）
+## 5. 运单号回写 Shopify / eBay（2026-11-15 设计，2026-11-16 实现）
 
-> 状态：**方案已出、代码一行未写**。§5.6 的 4 个决策点用户尚未回复，动工前先确认。
+> 状态：**第 1–5 步已实现**（迁移 `20261116100000` 已推送远端）。**第 6 步真实订单测试未做**，Task 还没 deploy 到 staging。实现与本设计稿的差异见 §5.7。
 
 ### 5.1 已具备的前提（不用再做）
 
@@ -160,16 +160,67 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 
 ### 5.5 发货通知邮件
 
-取决于 §5.6 决策 1：Shopify 打开 `notifyCustomer` 则 Shopify 单由平台发邮件；eBay 平台自己会通知买家。`store` / `backorder` 单是否需要自建邮件，另议。
+§5.6 决策 1 定为**关闭** `notifyCustomer`，所以 Shopify 单的发货通知邮件要由 go2office 自建（本期不做）；eBay 平台自己会通知买家。`store` / `backorder` 单是否需要邮件，另议。
 
-### 5.6 待用户确认（2026-11-15 提出，未回复）
+### 5.6 决策（2026-11-16 用户确认）
 
-| # | 问题 | 默认建议 |
+| # | 问题 | 决定 |
 |---|---|---|
-| 1 | Shopify `fulfillmentCreate` 是否 `notifyCustomer` | 打开（顺便解决 Shopify 单的发货通知邮件） |
-| 2 | Laravel 并行期间，Laravel 发的单由谁回写 | Laravel 自己回写；go2office 只推自己发的单（幂等检查防重复，但防不了 Laravel 漏推） |
-| 3 | 发货后改运单号是否自动更新平台 | 本期不做，只手动 Retry（eBay 不能改已有 shipping fulfillment，只能新建） |
-| 4 | `store` / `backorder` 平台订单 | 不写待办行，不处理 |
+| 1 | Shopify `fulfillmentCreate` 是否 `notifyCustomer` | **关闭**。Shopify 不给买家发邮件，发货通知邮件以后由 go2office 自建（§5.5） |
+| 2 | Laravel 并行期间，Laravel 发的单由谁回写 | **Laravel 自己回写**；go2office 只推自己发的单，推前先查平台现状防重复 |
+| 3 | 发货后改运单号是否自动更新平台 | **本期不做**，只提供手动 Retry |
+| 4 | `store` / `backorder` 平台订单 | **不写待办行，不处理** |
+
+### 5.7 实现说明（2026-11-16）
+
+**补充决策**（2026-11-16 用户确认，设计稿里没有）：
+
+| # | 问题 | 决定 |
+|---|---|---|
+| 5 | 没有真实运单号的单（Letter；或运单号栏填的是发票号，历史上 Letter / Parcel_Post 都这样） | **只标记已发货、不带运单号**。实测 Laravel 回写 eBay 时就是这样做的（`fulfillmentId: "999"`，无运单号） |
+| 6 | `Click_and_Collect` / `Store_Delivery` 的承运商 | **按运单号前缀判断**：`MS`/`MP` → Aramex；`33XXX`/`RPP`/`TMP`/`99…` → 澳邮；认不出 → 只标记已发货 |
+| 7 | eBay 的 Aramex 承运商代码 | **用户去 Seller Hub 确认后再填**。在此之前 `EBAY_CARRIER_CODE.aramex = null`，eBay 的 Aramex 单会明确失败并提示原因，不会写一个猜的值 |
+
+**与设计稿的差异**
+
+- `platform_fulfillment_syncs.tracking_number` 记的是「平台上现在挂着的号」，成功后才写入；`dispatch_order()` 插入时为 NULL。运单号的唯一来源是 `orders.tracking_number`，推送时实时读。
+- 发货后改运单号的处理（决策 3）：Retry 时，若 succeeded 行的号与订单当前的号不同就重推。Shopify 走 `fulfillmentTrackingInfoUpdate` 改我们建的那个 fulfillment，eBay 新建一个 shipping fulfillment。页面上这类行会显示 `Tracking number changed` 徽章。
+- 重复发货（订单被改回 `labelled` 再发一次）：`ON CONFLICT DO NOTHING`，不新增行。如果号变了，在订单页点 Retry。
+- 承运商判断（`resolveShipment`）：发货方式和运单号格式**都**指向承运商、且两者矛盾时直接失败，不挑一个用。按近一年的 14,800 张历史单测算，只有 18 张会落到这里（例如方式是 MyPost，单号却是 Aramex 的 `MP…`）。
+- 自动重试上限 3 次（`MAX_AUTO_ATTEMPTS`），超过后只能手动 Retry。
+
+**已核实的平台取值**
+
+| | Shopify（`trackingInfo.company`） | eBay（`shippingCarrierCode`） |
+|---|---|---|
+| 澳邮 | `Australia Post`（官方文档；实测 Laravel 回写 Shopify 也是这个值） | `AustraliaPost`（eBay ShippingCarrierCodeType） |
+| Aramex | `Aramex Australia`（官方文档的澳洲列表里只有这个写法，单独的 `Aramex` 不在列表中） | **待确认**（决策 7） |
+
+公司名在 Shopify 列表里时，Shopify 会自动生成追踪链接，所以不传 url。eBay 文档站拒绝自动抓取，`AustraliaPost` 是通过搜索引擎引用的 eBay 官方枚举页确认的。
+
+**只读预演（2026-11-16）**
+
+对真实订单只调用读接口、打印出计划，没有调用任何写接口：
+
+- Shopify `#G2B24770`：查询字段全部有效。Laravel 已用 `Australia Post` 发过货，计划结果是 `skipped`。
+- eBay `17-15414-28640` / `26-14867-27994`：两张都已被 Laravel 标记发货但不带运单号，计划是新建一个带澳邮运单号的 fulfillment。
+
+**新增文件**：
+
+- 迁移 `20261116100000_create_platform_fulfillment_syncs.sql`；
+- `src/lib/fulfillment/{platform-carriers,platform-push,platform-sync,queue-platform-fulfillment}.ts`；
+- `src/lib/{shopify,ebay}/fulfillment.ts`，eBay 客户端新增 `ebayPost`；
+- `src/trigger/push-platform-fulfillment.ts`（两个 Task）；
+- `src/lib/actions/platform-fulfillment.ts`、`src/lib/queries/platform-fulfillment.ts`；
+- 订单详情页 `platform-sync-panel.tsx`，发货搜索页的失败列表；
+- 4 个测试文件。
+
+### 5.8 第 6 步：真实订单测试（未做）
+
+1. `npx trigger.dev deploy` 到 staging（**部署后 sweep 定时任务立即生效**：届时若已有 pending 行，15 分钟内会被真实推送）。
+2. 挑一张 Shopify 单和一张 eBay 单，**由用户指定**，在 go2office 发货，然后到 Trigger.dev（staging）看 run、到平台后台看结果。
+3. 再点一次 Retry，确认得到 `already`、平台上没有出现第二个 fulfillment（幂等）。
+4. 用户确认 eBay Aramex 代码后：填 `EBAY_CARRIER_CODE.aramex`，删掉 `platform-carriers.test.ts` 里锁定 null 的那条用例，拿一张 eBay Aramex 单实测。
 
 ## 6. 交接与待测清单（2026-11-14 收工时）
 
@@ -195,4 +246,4 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 
 **注意**：Laravel 与 go2office 并行期间，同一张单只能在一个系统里发货，否则库存会扣两次。
 
-**下一阶段**：见 §5（Shopify / eBay 运单号回写、发货通知邮件）。2026-11-15 已出设计稿，未写代码；换机后先读 §5.6 的 4 个待确认决策，确认后按 §5.4 顺序动工。
+**下一阶段**：运单号回写已实现到第 5 步，剩第 6 步真实订单测试（§5.8）与 eBay Aramex 代码确认（§5.7 决策 7）。之后是发货通知邮件（§5.5：Shopify 已关闭 `notifyCustomer`，需自建）。

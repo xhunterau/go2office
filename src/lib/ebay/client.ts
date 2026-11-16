@@ -180,6 +180,57 @@ export async function ebayGet<T>(
   }
 }
 
+export type EbayPostResult<T> = {
+  status: number
+  /** The Location header: where eBay puts the id of what it just created. */
+  location: string | null
+  body: T | null
+}
+
+/**
+ * A POST against api.ebay.com. Not retried on transport failures, 429 or 5xx:
+ * the request may already have taken effect, and repeating it creates a second
+ * shipping fulfillment. Callers make a write safe to repeat by reading the
+ * platform's state first (src/lib/ebay/fulfillment.ts) and re-running
+ * the whole step. A 401 is retried once with a fresh token -- eBay refused
+ * that one before doing anything.
+ */
+export async function ebayPost<T>(
+  account: EbayAccount,
+  path: string,
+  body: unknown
+): Promise<EbayPostResult<T>> {
+  const url = new URL(path, API_BASE)
+
+  for (let refreshedAfter401 = false; ; refreshedAfter401 = true) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await getAccessToken(account)}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (response.status === 401 && !refreshedAfter401) {
+      tokenCache.delete(account.ebay_user_id)
+      continue
+    }
+
+    const text = await response.text()
+    if (!response.ok) {
+      throw new Error(`eBay POST ${url.pathname} failed: ${response.status} ${text.slice(0, 500)}`)
+    }
+
+    return {
+      status: response.status,
+      location: response.headers.get("location"),
+      body: text ? (JSON.parse(text) as T) : null,
+    }
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
