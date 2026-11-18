@@ -48,7 +48,7 @@ export default async function DispatchOrderPage({
   }
   if (!result.data) notFound()
 
-  const { order, items, stock } = result.data
+  const { order, items, stock, missingPlatformOrderId } = result.data
 
   // Opened from history, a bookmark, or a second tab after it went out.
   if (order.status !== DISPATCH_STATUS) {
@@ -84,6 +84,7 @@ export default async function DispatchOrderPage({
         items={items}
         stock={stock}
         locations={locations.options}
+        missingPlatformOrderId={missingPlatformOrderId}
       />
     </div>
   )

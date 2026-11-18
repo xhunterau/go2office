@@ -190,6 +190,7 @@
 - **推送前先读平台现状，这是可以重试的唯一前提**：`planShopifyFulfillment` / `planEbayFulfillment` 发现已有同一运单号就返回 `already`。正因为如此，这里的 `retry` 可以放宽、Retry 按钮可以反复点；**`submit-aramex-batch` 的 `maxAttempts: 1` 不因此放宽**（规则 24）。
 - **两个 Task 共用 `platform-fulfillment` 队列（`concurrencyLimit: 1`）**：先读后写的检查只有在同一张单不被并发推送时才成立。严禁给其中一个改用别的队列。
 - **`queuePlatformFulfillment` 不可放进 `"use server"` 文件**：它接收 `userId` 参数，`"use server"` 文件的每个导出都能从浏览器调用，放进去等于让任何人以他人名义写日志。
+- **平台订单号只挂在 `order_transactions.order_id_ebay` 上，丢了就静默不回传**：`orders` 没有自己的平台订单号列，`dispatch_order()` 按明细行上不同的 `order_id_ebay` 各写一行待办。2026-11-18 有三张 Shopify 单被删掉原明细行、手动重加，新行没有这个号，于是**照常发货、一行待办都不写、不报任何错**。现在 `createOrderTransaction` 在同单只有一个平台订单号时自动继承（含 `sales_record_number`），`deleteOrderTransaction` 拒绝删除某个平台订单号的最后一行；发货页在 Shopify / eBay 单缺号时**只提示、不拦截**（用户决策）。新增任何写 `order_transactions` 的路径都必须照此保住这一列。
 - **`authenticated` 对这张表只有 SELECT 和「只能插 pending 新行」的 INSERT 策略**：结果列只由 service role 写。Retry 是去触发 Task，不是去改行——不要为了 Retry 补 UPDATE 策略。
 
 # 28. 手动建单（create_manual_order）

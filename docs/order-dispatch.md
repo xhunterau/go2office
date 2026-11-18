@@ -149,7 +149,10 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 ### 5.3 边界情况
 
 - 平台上订单已取消 / 已退款 → 记 `failed` 并展示错误，人工处理，不自动重试到天荒地老（`attempts` 设上限）。
-- 订单里手工加的明细行没有平台 id → 不影响：按 `DISTINCT order_id_ebay` 推整单。
+- 订单里手工加的明细行没有平台 id → 只要同单还有别的行带着平台 id 就不影响：按 `DISTINCT order_id_ebay` 推整单。**但如果带平台 id 的行全被删了，就一行待办都不写、静默不回传**（2026-11-18：2603314B / 2603314C 已发货未回传，2603315B 同样缺号）。修复：
+  - `createOrderTransaction` 在同单只有一个平台订单号时，新行自动继承 `order_id_ebay` 与 `sales_record_number`；多个时不猜。
+  - `deleteOrderTransaction` 拒绝删除某个平台订单号的最后一行，提示改 SKU 或先加新行。
+  - 发货详情页对缺号的 Shopify / eBay 单显示 `Tracking will not be sent to …` 警告，**只提示、不拦截**（用户决策），由人工去平台后台填。
 - 重复运单号（`GO001` 确认放行的同包裹多单）→ 各自正常回写同一个运单号。
 - 迁移进来的 20 万张历史订单**永远不推**：待办行只由 `dispatch_order()` 产生。
 

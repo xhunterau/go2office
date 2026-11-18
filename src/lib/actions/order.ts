@@ -316,6 +316,9 @@ export async function createOrderTransaction(
     return { success: false, error: `No product matches the SKU ${label}.` }
   }
 
+  const platformRef = await inheritedPlatformRef(supabase, orderId)
+  if (platformRef.error) return { success: false, error: platformRef.error }
+
   // Both dates are NOT NULL with no default. A hand-added line has no separate
   // payment moment to record, so they get the same value.
   const now = new Date().toISOString()
@@ -330,6 +333,8 @@ export async function createOrderTransaction(
       item_title: toNullable(parsed.data.item_title),
       sale_date: now,
       paid_on_date: now,
+      order_id_ebay: platformRef.orderIdEbay,
+      sales_record_number: platformRef.salesRecordNumber,
     })
     .select("id")
     .single()
@@ -438,6 +443,87 @@ export async function updateOrderTransaction(
 //
 // Leaving an order with no lines at all is allowed: 25 migrated orders are
 // already in that state, and order_metrics_summary reports 0 for them.
+type Client = Awaited<ReturnType<typeof createClient>>
+
+// The platforms dispatch_order() writes tracking back to. A Shopify / eBay
+// order is linked to its platform order ONLY through order_transactions.
+// order_id_ebay -- orders has no column of its own -- and dispatch_order()
+// writes one write-back row per distinct value. Lose the last line carrying it
+// and the order still dispatches, but its tracking number silently never
+// reaches the platform (2603314B / 2603314C / 2603315B, 2026-11-18). The two
+// helpers below keep that link alive across hand edits (CLAUDE.md rule 27).
+const WRITE_BACK_PLATFORMS: ReadonlySet<string> = new Set(["shopify", "ebay"])
+
+/**
+ * The platform order a hand-added line should carry: the one the order's other
+ * lines already carry, when there is exactly one. A merged order holding lines
+ * from several platform orders is left alone -- picking one would be a guess,
+ * and the delete guard already guarantees each of them keeps a line.
+ */
+async function inheritedPlatformRef(
+  supabase: Client,
+  orderId: number
+): Promise<{ orderIdEbay: string | null; salesRecordNumber: string | null; error?: string }> {
+  const none = { orderIdEbay: null, salesRecordNumber: null }
+
+  const [{ data: order, error: orderError }, { data: lines, error: linesError }] =
+    await Promise.all([
+      supabase.from("orders").select("platform").eq("id", orderId).maybeSingle(),
+      supabase
+        .from("order_transactions")
+        .select("order_id_ebay, sales_record_number")
+        .eq("order_id", orderId),
+    ])
+
+  if (orderError) return { ...none, error: orderError.message }
+  if (linesError) return { ...none, error: linesError.message }
+  if (!order || !WRITE_BACK_PLATFORMS.has(order.platform)) return none
+
+  const carrying = (lines ?? []).filter((line) => line.order_id_ebay?.trim())
+  const ids = new Set(carrying.map((line) => line.order_id_ebay!.trim()))
+  if (ids.size !== 1) return none
+
+  const [orderIdEbay] = ids
+  const salesRecordNumber =
+    carrying.find((line) => line.sales_record_number?.trim())?.sales_record_number ?? null
+  return { orderIdEbay, salesRecordNumber }
+}
+
+/**
+ * Refuses to delete the last line of a Shopify / eBay order that carries a
+ * given platform order id. Returns the message to show, or null when the
+ * delete may go ahead.
+ */
+async function lastPlatformLineGuard(
+  supabase: Client,
+  transactionId: number
+): Promise<string | null> {
+  const { data: line, error } = await supabase
+    .from("order_transactions")
+    .select("order_id, order_id_ebay, orders(platform)")
+    .eq("id", transactionId)
+    .maybeSingle()
+
+  if (error) return error.message
+  const platformOrderId = line?.order_id_ebay?.trim()
+  const platform = (line?.orders as { platform: string } | null)?.platform
+  if (!line || !platformOrderId || !platform || !WRITE_BACK_PLATFORMS.has(platform)) {
+    return null
+  }
+
+  const { count, error: countError } = await supabase
+    .from("order_transactions")
+    .select("id", { count: "exact", head: true })
+    .eq("order_id", line.order_id)
+    .eq("order_id_ebay", line.order_id_ebay!)
+    .neq("id", transactionId)
+
+  if (countError) return countError.message
+  if ((count ?? 0) > 0) return null
+
+  return `This is the last line linked to the ${platform === "ebay" ? "eBay" : "Shopify"} order, and deleting it would stop the tracking number being sent back. Edit this line's SKU instead, or add the replacement line first and then delete this one.`
+}
+
 export async function deleteOrderTransaction(
   transactionId: number,
   orderId: number
@@ -447,6 +533,10 @@ export async function deleteOrderTransaction(
   }
 
   const supabase = await createClient()
+
+  const guard = await lastPlatformLineGuard(supabase, transactionId)
+  if (guard) return { success: false, error: guard }
+
   const { error } = await supabase
     .from("order_transactions")
     .delete()

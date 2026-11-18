@@ -67,11 +67,13 @@ export function DispatchOrderClient({
   items,
   stock,
   locations,
+  missingPlatformOrderId,
 }: {
   order: OrderDetail
   items: DispatchItem[]
   stock: Record<number, ProductStockLine[]>
   locations: LocationOption[]
+  missingPlatformOrderId: boolean
 }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -266,6 +268,22 @@ export function DispatchOrderClient({
           </div>
         ) : null}
       </section>
+
+      {/* A warning, not a blocker (user decision, 2026-11-18): the parcel can
+          still go, but nobody would otherwise learn the platform was never told. */}
+      {missingPlatformOrderId ? (
+        <section className="flex flex-col gap-1 rounded-2xl border border-warning/60 bg-warning/10 p-5">
+          <p className="flex items-center gap-2 text-base font-medium text-foreground">
+            <TriangleAlert className="size-5" />
+            Tracking will not be sent to {SALES_PLATFORM_LABELS[order.platform]}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            None of this order&apos;s lines carries the {SALES_PLATFORM_LABELS[order.platform]} order
+            number, usually because a line was deleted and added again. You can still dispatch it,
+            but enter the tracking number in {SALES_PLATFORM_LABELS[order.platform]} by hand.
+          </p>
+        </section>
+      ) : null}
 
       {/* Shown, not gated: go2office does not make the packer acknowledge the
           note before dispatching (user decision, 2026-11-18). */}

@@ -106,6 +106,14 @@ export type DispatchOrder = {
    * the shared StockMovementDialog for an in-place fix.
    */
   stock: Record<number, ProductStockLine[]>
+  /**
+   * A Shopify / eBay order none of whose lines carries the platform order id.
+   * dispatch_order() writes one write-back row per distinct order_id_ebay, so
+   * such an order dispatches fine but its tracking number never reaches the
+   * platform -- silently. Shown as a warning, not a block (user decision,
+   * 2026-11-18): the packer can still ship and fill the number in by hand.
+   */
+  missingPlatformOrderId: boolean
 }
 
 /**
@@ -170,5 +178,12 @@ export async function fetchDispatchOrder(
     }
   }
 
-  return { data: { order: detail.order, items, stock }, error: null }
+  const missingPlatformOrderId =
+    (detail.order.platform === "shopify" || detail.order.platform === "ebay") &&
+    !lines.transactions.some((transaction) => transaction.order_id_ebay?.trim())
+
+  return {
+    data: { order: detail.order, items, stock, missingPlatformOrderId },
+    error: null,
+  }
 }
