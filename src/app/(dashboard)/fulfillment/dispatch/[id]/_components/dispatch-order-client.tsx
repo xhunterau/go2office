@@ -3,24 +3,26 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { CheckCircle2, Loader2, MessageSquareWarning, PackageCheck, RotateCcw, ScanLine } from "lucide-react"
+import {
+  CheckCircle2,
+  ExternalLink,
+  Loader2,
+  MessageSquareWarning,
+  PackageCheck,
+  RotateCcw,
+  ScanLine,
+  TriangleAlert,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { useConfirm } from "@/components/providers/confirm-provider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form"
+import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { useBarcodeScanner } from "@/hooks/use-barcode-scanner"
 import { dispatchOrder } from "@/lib/actions/dispatch"
 import { usableAddressLines } from "@/lib/fulfillment/csv"
 import {
@@ -36,14 +38,27 @@ import type { DispatchItem } from "@/lib/queries/dispatch"
 import type { ProductStockLine } from "@/lib/queries/inventory"
 import type { LocationOption } from "@/lib/queries/locations"
 import type { OrderDetail } from "@/lib/queries/orders"
+import { cn } from "@/lib/utils"
 import { trackingFormSchema, type TrackingFormValues } from "@/lib/validations/dispatch"
 
-import { DispatchItemsTable } from "./dispatch-items-table"
+import { DispatchItemsList } from "./dispatch-items-list"
 
 /**
- * Pick and pack as one step: confirm where each item comes from, enter the
- * tracking number, dispatch. xpros' item-by-item barcode check is left out on
- * purpose (user decision, 2026-11-14).
+ * Two-digit year + six upper-case hex digits (format_invoice_number). A scan of
+ * that shape is the packing slip, not the label, and must never be saved as a
+ * tracking number.
+ */
+const INVOICE_PATTERN = /^[0-9A-F]{8}$/i
+
+/**
+ * Pick and pack as one step: confirm where each item comes from, scan the
+ * label, dispatch. xpros' item-by-item barcode check is left out on purpose
+ * (user decision, 2026-11-14).
+ *
+ * The tracking number arrives through a document-level scanner listener, not a
+ * focused input: on a tablet a focused input raises the on-screen keyboard over
+ * half the page, and a tap anywhere else would silently lose the scan. The
+ * input stays for typing a number by hand.
  *
  * Afterwards the page returns to the search, not to the next order in the
  * queue: the operator opens the order for the parcel actually in front of them.
@@ -88,6 +103,7 @@ export function DispatchOrderClient({
   // operator unlocks it only to replace it.
   const existingTracking = order.tracking_number?.trim() || null
   const [editingTracking, setEditingTracking] = React.useState(existingTracking === null)
+  const [busy, setBusy] = React.useState(false)
   const trackingRef = React.useRef<HTMLInputElement | null>(null)
 
   const form = useForm<TrackingFormValues>({
@@ -121,6 +137,52 @@ export function DispatchOrderClient({
   function submit(values: TrackingFormValues) {
     if (blockers.length > 0 || dispatchPicks === null) return
     void run(values.tracking_number, dispatchPicks)
+  }
+
+  async function handleScan(value: string) {
+    if (isPending || busy) return
+
+    if (INVOICE_PATTERN.test(value)) {
+      if (value.toUpperCase() === order.invoice_number.toUpperCase()) {
+        toast.message("This order is already open", { description: "Now scan the tracking number on the label." })
+      } else {
+        toast.warning(`That is invoice ${value.toUpperCase()}, not a tracking number`, {
+          action: { label: "Open it", onClick: () => router.push(`/fulfillment/dispatch?q=${encodeURIComponent(value)}`) },
+        })
+      }
+      return
+    }
+
+    if (!noteRead) {
+      toast.warning("Read the customer note first", { description: "Then scan the label again." })
+      return
+    }
+
+    // A label that was booked through Aramex already carries its number. The
+    // scan is a raw barcode that may wrap the stored article id, so "contains"
+    // is the same parcel; anything else is a different label.
+    if (!editingTracking && existingTracking) {
+      const sameParcel = value.toUpperCase().includes(existingTracking.toUpperCase())
+      if (!sameParcel) {
+        setBusy(true)
+        const replace = await confirm({
+          title: "Replace the tracking number?",
+          description: `This order already has ${existingTracking}. The scanned label reads ${value}.`,
+          confirmText: "Use the scanned number",
+        })
+        setBusy(false)
+        if (!replace) return
+        setEditingTracking(true)
+      }
+    }
+
+    form.setValue("tracking_number", value, { shouldDirty: true, shouldValidate: true })
+
+    if (blockers.length > 0) {
+      toast.warning("Tracking number captured — not ready to dispatch", { description: blockers[0] })
+      return
+    }
+    void form.handleSubmit(submit)()
   }
 
   async function run(trackingNumber: string, picksToSend: DispatchPick[]) {
@@ -169,137 +231,172 @@ export function DispatchOrderClient({
     })
   }
 
+  // Registered after run(): the listener's callback reaches it through
+  // handleScan -> submit, and the compiler wants it declared first.
+  useBarcodeScanner((value) => void handleScan(value), !isPending)
+
+  const trackingValue = useWatch({ control: form.control, name: "tracking_number" })?.trim() ?? ""
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="font-mono text-lg font-semibold text-foreground">{order.invoice_number}</h1>
-        <Badge variant="outline">{SALES_PLATFORM_LABELS[order.platform]}</Badge>
-        <Badge variant={shipping.isEmpty ? "warning" : "info"}>{shipping.label}</Badge>
-        <Link
-          href={`/orders/${order.id}`}
-          className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-        >
-          Open order
-        </Link>
-      </div>
-
-      {customer ? (
-        <div className="rounded-xl border border-border p-4 text-sm">
-          <p className="font-medium text-foreground">{customer.full_name}</p>
-          {customer.company_name ? <p>{customer.company_name}</p> : null}
-          {usableAddressLines(customer).map((line) => (
-            <p key={line}>{line}</p>
-          ))}
-          <p>{[customer.city, customer.state, customer.postcode].filter(Boolean).join(" ")}</p>
+      {/* Order and destination */}
+      <section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="font-mono text-2xl font-semibold tracking-tight text-foreground">
+            {order.invoice_number}
+          </h1>
+          <Badge variant="outline" className="text-sm">
+            {SALES_PLATFORM_LABELS[order.platform]}
+          </Badge>
+          <Badge variant={shipping.isEmpty ? "warning" : "info"} className="text-sm">
+            {shipping.label}
+          </Badge>
+          <Link
+            href={`/orders/${order.id}`}
+            className="ml-auto inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Open order <ExternalLink className="size-3.5" />
+          </Link>
         </div>
-      ) : null}
+
+        {customer ? (
+          <div className="flex flex-col gap-0.5 text-base">
+            <p className="text-lg font-medium text-foreground">{customer.full_name}</p>
+            {customer.company_name ? <p className="text-foreground">{customer.company_name}</p> : null}
+            {usableAddressLines(customer).map((line) => (
+              <p key={line} className="text-muted-foreground">
+                {line}
+              </p>
+            ))}
+            <p className="text-muted-foreground">
+              {[customer.city, customer.state, customer.postcode].filter(Boolean).join(" ")}
+            </p>
+          </div>
+        ) : null}
+      </section>
 
       {note ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-warning/60 bg-warning/10 p-4 text-sm">
-          <p className="flex items-center gap-1.5 font-medium text-foreground">
-            <MessageSquareWarning className="size-4" />
+        <section
+          className={cn(
+            "flex flex-col gap-3 rounded-2xl border p-5",
+            noteRead ? "border-border bg-card" : "border-warning/60 bg-warning/10"
+          )}
+        >
+          <p className="flex items-center gap-2 text-base font-medium text-foreground">
+            <MessageSquareWarning className="size-5" />
             Customer note
           </p>
-          <p className="whitespace-pre-wrap text-foreground">{note}</p>
+          <p className="text-base whitespace-pre-wrap text-foreground">{note}</p>
           {noteRead ? (
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <CheckCircle2 className="size-3.5 text-success-foreground" />
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <CheckCircle2 className="size-4 text-success-foreground" />
               Note read
             </p>
           ) : (
-            <Button
-              size="sm"
-              className="self-start"
-              onClick={() => {
-                setNoteRead(true)
-                // Straight on to the scan, as on a page with no note.
-                requestAnimationFrame(() => trackingRef.current?.focus())
-              }}
-            >
+            <Button size="lg" className="h-12 self-start px-6 text-base" onClick={() => setNoteRead(true)}>
               I have read the note
             </Button>
           )}
-        </div>
+        </section>
       ) : null}
 
-      <DispatchItemsTable
-        orderId={order.id}
-        items={items}
-        stock={stock}
-        picks={picks}
-        shortages={shortages}
-        locations={locations}
-        onPick={(itemId, locationId) =>
-          setOverrides((current) => new Map(current).set(itemId, locationId))
-        }
-      />
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-muted-foreground">
+          Items · {totalUnits} {totalUnits === 1 ? "unit" : "units"}
+        </h2>
+        <DispatchItemsList
+          orderId={order.id}
+          items={items}
+          stock={stock}
+          picks={picks}
+          shortages={shortages}
+          locations={locations}
+          onPick={(itemId, locationId) =>
+            setOverrides((current) => new Map(current).set(itemId, locationId))
+          }
+        />
+      </section>
 
+      {/* Pinned to the bottom of the screen: the scan and the button are the
+          two things the operator needs whatever they scrolled to. */}
       <Form {...form}>
         <form
           onSubmit={form.handleSubmit(submit)}
-          className="flex flex-col gap-3 rounded-xl border border-border p-4"
+          className="sticky bottom-0 z-10 -mx-1 flex flex-col gap-3 rounded-t-2xl border border-b-0 border-border bg-background/95 p-4 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.25)] backdrop-blur supports-[backdrop-filter]:bg-background/80"
         >
+          <div className="flex items-center gap-2 text-sm">
+            {trackingValue ? (
+              <>
+                <CheckCircle2 className="size-4 text-success-foreground" />
+                <span className="text-muted-foreground">
+                  {editingTracking ? "Tracking number captured" : "Tracking number recorded when the label was booked"}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex size-2.5">
+                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60" />
+                  <span className="relative inline-flex size-2.5 rounded-full bg-primary" />
+                </span>
+                <span className="font-medium text-foreground">Ready — scan the tracking label</span>
+                <span className="text-muted-foreground">or type it below</span>
+              </>
+            )}
+          </div>
+
           <FormField
             control={form.control}
             name="tracking_number"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="flex items-center gap-1.5">
-                  <ScanLine className="size-4" />
-                  Tracking number
-                </FormLabel>
-                <div className="flex max-w-xl gap-2">
-                  <FormControl>
-                    <Input
-                      {...field}
-                      ref={(element) => {
-                        field.ref(element)
-                        trackingRef.current = element
-                      }}
-                      autoFocus={editingTracking && noteRead}
-                      readOnly={!editingTracking}
-                      placeholder="Scan or type the tracking number"
-                      autoComplete="off"
-                      className="font-mono"
-                    />
-                  </FormControl>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <ScanLine className="pointer-events-none absolute top-1/2 left-4 size-5 -translate-y-1/2 text-muted-foreground" />
+                    <FormControl>
+                      <Input
+                        {...field}
+                        ref={(element) => {
+                          field.ref(element)
+                          trackingRef.current = element
+                        }}
+                        readOnly={!editingTracking}
+                        placeholder="Tracking number"
+                        aria-label="Tracking number"
+                        autoComplete="off"
+                        className="h-12 rounded-xl pl-12 font-mono text-lg md:text-lg"
+                      />
+                    </FormControl>
+                  </div>
                   {editingTracking ? null : (
-                    <Button type="button" variant="outline" onClick={startReentry}>
-                      <RotateCcw className="size-4" />
+                    <Button type="button" variant="outline" className="h-12 px-4 text-base" onClick={startReentry}>
+                      <RotateCcw className="size-5" />
                       Re-enter
                     </Button>
                   )}
                 </div>
-                {editingTracking ? (
-                  <FormDescription>
-                    A full barcode scan is fine; it is trimmed to the carrier&apos;s number when saved.
-                  </FormDescription>
-                ) : (
-                  <FormDescription>Recorded when the label was booked.</FormDescription>
-                )}
                 <FormMessage />
               </FormItem>
             )}
           />
 
           {blockers.length > 0 ? (
-            <ul className="flex flex-col gap-1 text-xs text-warning-foreground">
+            <ul className="flex flex-col gap-1 text-sm text-warning-foreground">
               {blockers.map((reason) => (
-                <li key={reason}>{reason}</li>
+                <li key={reason} className="flex items-start gap-1.5">
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                  {reason}
+                </li>
               ))}
             </ul>
           ) : null}
 
           <Button
             type="submit"
-            className="self-start"
+            size="lg"
+            className="h-14 w-full rounded-xl text-lg"
             disabled={isPending || blockers.length > 0}
           >
-            {isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <PackageCheck className="size-4" />
-            )}
+            {isPending ? <Loader2 className="size-5 animate-spin" /> : <PackageCheck className="size-5" />}
             Dispatch
           </Button>
         </form>

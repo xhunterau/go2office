@@ -28,16 +28,16 @@ export default async function DispatchOrderPage({
   const back = (
     <Link
       href="/fulfillment/dispatch"
-      className="flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+      className="flex h-10 w-fit items-center gap-1.5 rounded-lg pr-3 text-sm text-muted-foreground hover:text-foreground"
     >
-      <ArrowLeft className="size-3.5" />
-      Dispatch
+      <ArrowLeft className="size-4" />
+      Back to search
     </Link>
   )
 
   if (result.error || locations.error) {
     return (
-      <div className="flex flex-1 flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4">
         {back}
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm">
           <p className="font-medium text-foreground">The order could not be loaded.</p>
@@ -53,7 +53,7 @@ export default async function DispatchOrderPage({
   // Opened from history, a bookmark, or a second tab after it went out.
   if (order.status !== DISPATCH_STATUS) {
     return (
-      <div className="flex flex-1 flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4">
         {back}
         <h1 className="text-lg font-semibold text-foreground">Order {order.invoice_number}</h1>
         <div className="rounded-xl border border-border p-4 text-sm">
@@ -77,7 +77,7 @@ export default async function DispatchOrderPage({
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4">
       {back}
       <DispatchOrderClient
         order={order}
