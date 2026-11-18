@@ -11,6 +11,7 @@ import { runAddressCheck } from "@/lib/actions/allocation"
 import type { AddressStageOrder } from "@/lib/queries/allocation"
 
 import { AddressOrderCard } from "./address-order-card"
+import { InfoHint } from "./info-hint"
 
 export function AddressStageClient({
   orders,
@@ -56,21 +57,33 @@ export function AddressStageClient({
 
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" onClick={handleCheck} disabled={isChecking}>
-          {isChecking ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <RefreshCw className="size-4" />
-          )}
-          Run address check
-        </Button>
-        <p className="text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+        <div className="flex items-center gap-1.5">
+          <Button size="sm" onClick={handleCheck} disabled={isChecking}>
+            {isChecking ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <RefreshCw className="size-4" />
+            )}
+            Run address check
+          </Button>
           {/* Worth saying, because the button finishing instantly on a queue of
               any size looks like it did nothing. It is one statement, not a
               per-order loop. */}
-          Checks every pending Australian order in a single pass and passes the
-          ones that resolve. Safe to run at any time.
+          <InfoHint>
+            Checks every pending Australian order in a single pass and passes the ones that resolve to
+            Postage. Safe to run at any time.
+          </InfoHint>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {orders.length === 0 ? (
+            "Queue is clear"
+          ) : (
+            <>
+              <span className="font-medium tabular-nums text-foreground">{orders.length}</span> order
+              {orders.length === 1 ? "" : "s"} to review
+            </>
+          )}
         </p>
       </div>
 
@@ -89,14 +102,14 @@ export function AddressStageClient({
         <APIProvider apiKey={mapsApiKey}>{list}</APIProvider>
       ) : (
         <>
-          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm">
-            <p className="font-medium text-foreground">Address search is off.</p>
-            <p className="mt-1 text-muted-foreground">
-              NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is not set, so the lookup box is
-              hidden. Every field is still editable by hand and the postcode
-              check below each form still works.
-            </p>
-          </div>
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
+            <span className="font-medium">Address search is off</span>
+            <span className="text-muted-foreground">
+              {" "}
+              — NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is not set. Fields are still editable by hand and the postcode
+              check still works.
+            </span>
+          </p>
           {list}
         </>
       )}

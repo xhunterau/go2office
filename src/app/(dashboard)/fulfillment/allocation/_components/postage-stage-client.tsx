@@ -3,7 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronRight, Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -32,6 +32,7 @@ import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { formatDate, formatMoney, formatWeightKg } from "@/lib/format"
 import type { BatchPostageCheckResult } from "@/trigger/batch-postage-check"
 
+import { InfoHint } from "./info-hint"
 import { ManualApprovalDialog } from "./manual-approval-dialog"
 import { Margin, PostageOrderDialog } from "./postage-order-dialog"
 
@@ -125,29 +126,26 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
 
   return (
     <div className="flex flex-1 flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button size="sm" onClick={handleRunBatch} disabled={busy || orders.length === 0}>
-            {busy ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <RefreshCw className="size-4" />
-            )}
-            {running ? "Quoting…" : `Quote all${orders.length ? ` (${orders.length})` : ""}`}
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            Prices every order in the queue against each carrier that can carry
-            it. Re-running replaces the rates shown; it never approves anything.
-          </p>
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            <Button size="sm" onClick={handleRunBatch} disabled={busy || orders.length === 0}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              {running ? "Quoting…" : `Quote all${orders.length ? ` (${orders.length})` : ""}`}
+            </Button>
+            <InfoHint>
+              Prices every order in the queue against each carrier that can carry it. Re-running replaces the
+              rates shown; it never approves anything.
+            </InfoHint>
+          </div>
+          <QueueSummary orders={orders} />
         </div>
 
         {running ? (
           <div className="flex max-w-md flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
-                {progress
-                  ? `Quoting order ${progress.current} of ${progress.total}`
-                  : "Starting the batch"}
+                {progress ? `Quoting order ${progress.current} of ${progress.total}` : "Starting the batch"}
               </span>
               {progress ? (
                 <span className="tabular-nums">
@@ -157,17 +155,13 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
             </div>
             <Progress
               value={
-                progress && progress.total > 0
-                  ? Math.round((progress.current / progress.total) * 100)
-                  : null
+                progress && progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : null
               }
             />
             <button
               type="button"
               onClick={() =>
-                stop(
-                  "Stopped waiting. The batch may still be running — reload the page to see the rates."
-                )
+                stop("Stopped waiting. The batch may still be running — reload the page to see the rates.")
               }
               className="self-start text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
             >
@@ -194,22 +188,18 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
         </div>
       ) : (
         <>
-          <p className="text-xs text-muted-foreground">
-            Select an order to see what is in it, where it is going and every
-            rate it was quoted.
-          </p>
-          <div className="overflow-x-auto rounded-xl border border-border">
+          <div className="overflow-x-auto rounded-xl border border-border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Invoice</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead>Destination</TableHead>
+                  <TableHead>Ship to</TableHead>
                   <TableHead className="text-right">Goods</TableHead>
                   <TableHead className="text-right">Chargeable</TableHead>
-                  <TableHead className="text-right">Received</TableHead>
-                  <TableHead className="text-right">Cheapest</TableHead>
-                  <TableHead className="w-24" />
+                  <TableHead className="text-right">Customer paid</TableHead>
+                  <TableHead className="text-right">Cheapest rate</TableHead>
+                  <TableHead className="w-28" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -256,6 +246,34 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
         }}
       />
     </div>
+  )
+}
+
+/** "21 orders · 18 quoted · 3 not quoted", so the state of the queue reads at a glance. */
+function QueueSummary({ orders }: { orders: PostageStageOrder[] }) {
+  if (orders.length === 0) return <p className="text-sm text-muted-foreground">Queue is clear</p>
+
+  const quoted = orders.filter((order) => order.quotes.length > 0).length
+  const notQuoted = orders.length - quoted
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+      <span>
+        <span className="font-medium tabular-nums text-foreground">{orders.length}</span> order
+        {orders.length === 1 ? "" : "s"}
+      </span>
+      <span aria-hidden>·</span>
+      <span>
+        <span className="tabular-nums text-foreground">{quoted}</span> quoted
+      </span>
+      {notQuoted > 0 ? (
+        <>
+          <span aria-hidden>·</span>
+          <span className="text-warning-foreground">
+            <span className="tabular-nums">{notQuoted}</span> not quoted
+          </span>
+        </>
+      ) : null}
+    </p>
   )
 }
 
@@ -324,10 +342,13 @@ function OrderRow({
         {formatDate(order.posted_on_date ?? order.created_at)}
       </TableCell>
       <TableCell className="text-sm">
-        {customer?.city?.trim() || "—"}{" "}
-        <span className="text-muted-foreground tabular-nums">
-          {customer?.state ?? ""} {customer?.postcode ?? ""}
-        </span>
+        <p className="font-medium text-foreground">{customer?.full_name?.trim() || "—"}</p>
+        <p className="text-xs text-muted-foreground">
+          {customer?.city?.trim() || "—"}{" "}
+          <span className="tabular-nums">
+            {customer?.state ?? ""} {customer?.postcode ?? ""}
+          </span>
+        </p>
       </TableCell>
       <TableCell className="text-right text-sm tabular-nums">
         {formatMoney(metrics?.goods_total ?? null)}
@@ -365,10 +386,9 @@ function OrderRow({
         )}
       </TableCell>
       <TableCell className="text-right">
-        <span className="text-xs text-muted-foreground">
-          {priced.length > 0
-            ? `${priced.length} option${priced.length === 1 ? "" : "s"}`
-            : ""}
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          {priced.length > 0 ? `${priced.length} rate${priced.length === 1 ? "" : "s"}` : null}
+          <ChevronRight className="size-4" />
         </span>
       </TableCell>
     </TableRow>

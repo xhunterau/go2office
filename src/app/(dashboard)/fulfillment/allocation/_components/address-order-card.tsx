@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button"
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -39,6 +38,8 @@ import {
 } from "@/lib/validations/allocation"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { formatDate } from "@/lib/format"
+
+import { InfoHint } from "./info-hint"
 
 export function AddressOrderCard({
   order,
@@ -160,9 +161,18 @@ export function AddressOrderCard({
     })
   }
 
+  const postcodeKnown = order.knownLocalities.length > 0
+  const onFile = [customer?.address_line1, customer?.address_line2]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+  const locality = [customer?.city, customer?.state, customer?.postcode]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" ")
+
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border p-4">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
         <Link
           href={`/orders/${order.id}`}
           className="font-medium text-foreground underline-offset-4 hover:underline"
@@ -173,177 +183,182 @@ export function AddressOrderCard({
           {customer?.full_name?.trim() || "No name on file"}
         </span>
         <Badge variant="secondary">{SALES_PLATFORM_LABELS[order.platform]}</Badge>
+        {/* Says which half of the pair is wrong. An unknown postcode and a
+            misspelt suburb look identical on the order and are fixed
+            differently. */}
+        <Badge variant="warning">{postcodeKnown ? "Suburb mismatch" : "Unknown postcode"}</Badge>
         <span className="ml-auto text-xs text-muted-foreground">
           {formatDate(order.posted_on_date ?? order.created_at)}
         </span>
       </div>
 
-      <div className="rounded-lg bg-muted/40 p-3 text-sm">
-        <p className="text-xs font-medium text-muted-foreground">On file now</p>
-        <p className="mt-1 text-foreground">
-          {[
-            customer?.address_line1,
-            customer?.address_line2,
-            customer?.city,
-            customer?.state,
-            customer?.postcode,
-          ]
-            .filter((part) => part?.trim())
-            .join(", ") || "No address"}
-        </p>
-        {/* Says which half of the pair is wrong. An unknown postcode and a
-            misspelt suburb look identical on the order and are fixed
-            differently. */}
-        <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
-          {order.knownLocalities.length === 0
-            ? `Postcode ${customer?.postcode?.trim() || "—"} is not in the reference at all.`
-            : `Postcode ${customer?.postcode?.trim()} is known, but not with the suburb “${customer?.city?.trim() || "—"}”.`}
-        </p>
-      </div>
-
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-4">
-          {searchEnabled ? (
-            <div className="flex flex-col gap-1.5">
-              <Label>Search address</Label>
-              <AddressAutocomplete onSelect={applyPlace} disabled={busy} />
-              <p className="text-xs text-muted-foreground">
-                Fills the fields below. Check the suburb afterwards — Google
-                returns localities the postcode reference does not always hold.
-              </p>
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <div className="grid gap-5 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+            <div className="flex flex-col gap-3">
+              <div className="rounded-lg bg-muted/50 p-3 text-sm">
+                <p className="text-xs font-medium text-muted-foreground">On file now</p>
+                <div className="mt-1 text-foreground">
+                  {onFile.length === 0 && !locality ? (
+                    <p className="text-muted-foreground">No address</p>
+                  ) : (
+                    <>
+                      {onFile.map((line, index) => (
+                        <p key={index}>{line}</p>
+                      ))}
+                      <p className="tabular-nums">{locality}</p>
+                    </>
+                  )}
+                </div>
+                <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning-foreground" />
+                  {postcodeKnown
+                    ? `Postcode ${customer?.postcode?.trim()} is known, but not with the suburb “${customer?.city?.trim() || "—"}”.`
+                    : `Postcode ${customer?.postcode?.trim() || "—"} is not in the reference at all.`}
+                </p>
+              </div>
+
+              <ResolutionNote
+                resolution={resolution}
+                checking={isChecking}
+                onPick={(picked) => {
+                  form.setValue("city", picked, { shouldDirty: true })
+                  void refreshResolution()
+                }}
+              />
             </div>
-          ) : null}
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="address_line1"
-              render={({ field }) => (
-                <FormItem className="sm:col-span-2">
-                  <FormLabel>Street address</FormLabel>
-                  <FormControl>
-                    <Input {...field} disabled={busy} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="flex flex-col gap-4">
+              {searchEnabled ? (
+                <div className="flex flex-col gap-1.5">
+                  <Label className="flex items-center gap-1">
+                    Search address
+                    <InfoHint>
+                      Fills the fields below. Check the suburb afterwards — Google returns localities the
+                      postcode reference does not always hold.
+                    </InfoHint>
+                  </Label>
+                  <AddressAutocomplete onSelect={applyPlace} disabled={busy} />
+                </div>
+              ) : null}
 
-            <FormField
-              control={form.control}
-              name="address_line2"
-              render={({ field }) => (
-                <FormItem className="sm:col-span-2">
-                  <FormLabel>Address line 2</FormLabel>
-                  <FormControl>
-                    <Input {...field} value={field.value ?? ""} disabled={busy} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <div className="grid gap-4 sm:grid-cols-6">
+                <FormField
+                  control={form.control}
+                  name="address_line1"
+                  render={({ field }) => (
+                    <FormItem className="sm:col-span-6">
+                      <FormLabel>Street address</FormLabel>
+                      <FormControl>
+                        <Input {...field} disabled={busy} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-            <FormField
-              control={form.control}
-              name="city"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Suburb</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      disabled={busy}
-                      onBlur={() => {
-                        field.onBlur()
-                        void refreshResolution()
-                      }}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                <FormField
+                  control={form.control}
+                  name="address_line2"
+                  render={({ field }) => (
+                    <FormItem className="sm:col-span-6">
+                      <FormLabel>Address line 2</FormLabel>
+                      <FormControl>
+                        <Input {...field} value={field.value ?? ""} disabled={busy} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-            <FormField
-              control={form.control}
-              name="postcode"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Postcode</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      inputMode="numeric"
-                      disabled={busy}
-                      onBlur={() => {
-                        field.onBlur()
-                        void refreshResolution()
-                      }}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {/* The pad is not cosmetic: the reference stores four digits
-                        and a three-digit NT postcode never matches. */}
-                    Saved padded to four digits, so 800 becomes 0800.
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                <FormField
+                  control={form.control}
+                  name="city"
+                  render={({ field }) => (
+                    <FormItem className="sm:col-span-3">
+                      <FormLabel>Suburb</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          disabled={busy}
+                          onBlur={() => {
+                            field.onBlur()
+                            void refreshResolution()
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-muted-foreground">State</Label>
-              <Input value={customer?.state ?? ""} readOnly disabled />
-              <p className="text-xs text-muted-foreground">
-                {/* CLAUDE.md rule 21: the trigger rewrites this on every save, so
-                    an editable box here would be a field that silently ignores
-                    what you type. */}
-                Derived from the suburb and postcode when you save. To change it,
-                edit the row under{" "}
-                <Link
-                  href="/settings/postcodes"
-                  className="underline underline-offset-4"
-                >
-                  Settings → Postcodes
-                </Link>
-                .
-              </p>
+                <FormField
+                  control={form.control}
+                  name="postcode"
+                  render={({ field }) => (
+                    <FormItem className="sm:col-span-2">
+                      <FormLabel className="flex items-center gap-1">
+                        Postcode
+                        {/* The pad is not cosmetic: the reference stores four
+                            digits and a three-digit NT postcode never matches. */}
+                        <InfoHint>Saved padded to four digits, so 800 becomes 0800.</InfoHint>
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          inputMode="numeric"
+                          disabled={busy}
+                          onBlur={() => {
+                            field.onBlur()
+                            void refreshResolution()
+                          }}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className="flex flex-col gap-2 sm:col-span-1">
+                  <Label className="flex items-center gap-1 text-muted-foreground">
+                    State
+                    {/* CLAUDE.md rule 21: the trigger rewrites this on every save,
+                        so an editable box here would be a field that silently
+                        ignores what you type. */}
+                    <InfoHint>
+                      Derived from the suburb and postcode when you save. To change it, edit the row under
+                      Settings → Postcodes.
+                    </InfoHint>
+                  </Label>
+                  <Input value={customer?.state ?? ""} readOnly disabled />
+                </div>
+              </div>
             </div>
           </div>
 
-          <ResolutionNote
-            resolution={resolution}
-            checking={isChecking}
-            onPick={(locality) => {
-              form.setValue("city", locality, { shouldDirty: true })
-              void refreshResolution()
-            }}
-          />
-
-          <p className="text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border bg-muted/30 px-4 py-3">
             {/* orders keep no address of their own (docs/orders-ui.md 6.3), and
                 an operator fixing one order's label has no reason to expect
                 that. */}
-            This is the customer&apos;s address, shared by every order they have
-            placed — saving it changes their past orders too.
-          </p>
-
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => void handlePassUnchanged()}
-            >
-              {isPassing ? <Loader2 className="size-4 animate-spin" /> : null}
-              Pass without changes
-            </Button>
-            <Button type="submit" size="sm" disabled={busy}>
-              {isSaving ? <Loader2 className="size-4 animate-spin" /> : null}
-              Save and pass
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              Saving updates the customer&apos;s address on every order they have placed.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => void handlePassUnchanged()}
+              >
+                {isPassing ? <Loader2 className="size-4 animate-spin" /> : null}
+                Pass without changes
+              </Button>
+              <Button type="submit" size="sm" disabled={busy}>
+                {isSaving ? <Loader2 className="size-4 animate-spin" /> : null}
+                Save and pass
+              </Button>
+            </div>
           </div>
         </form>
       </Form>
