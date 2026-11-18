@@ -116,7 +116,7 @@ export function AppSidebar() {
 
               <Collapsible
                 asChild
-                defaultOpen={isProductsActive}
+                defaultOpen
                 className="group/collapsible"
               >
                 <SidebarMenuItem>
@@ -155,7 +155,7 @@ export function AppSidebar() {
 
               <Collapsible
                 asChild
-                defaultOpen={isInventoryActive}
+                defaultOpen
                 className="group/collapsible"
               >
                 <SidebarMenuItem>
@@ -190,7 +190,7 @@ export function AppSidebar() {
 
               <Collapsible
                 asChild
-                defaultOpen={isSalesActive}
+                defaultOpen
                 className="group/collapsible"
               >
                 <SidebarMenuItem>
@@ -222,7 +222,7 @@ export function AppSidebar() {
 
               <Collapsible
                 asChild
-                defaultOpen={isSettingsActive}
+                defaultOpen
                 className="group/collapsible"
               >
                 <SidebarMenuItem>
