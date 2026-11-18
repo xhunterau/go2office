@@ -315,6 +315,9 @@ function OrderRow({
         </Link>
         <div className="mt-0.5 flex items-center gap-1.5">
           <Badge variant="secondary">{SALES_PLATFORM_LABELS[order.platform]}</Badge>
+          {/* A hand-made order not filled in yet. Approval refuses it
+              (requireItems in actions/allocation.ts); this says why up front. */}
+          {metrics?.total_items === 0 ? <Badge variant="destructive">No items</Badge> : null}
         </div>
       </TableCell>
       <TableCell className="text-sm whitespace-nowrap text-muted-foreground">

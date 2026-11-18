@@ -407,6 +407,32 @@ export async function loadOrderContents(
 export type ApprovalResult = { warning?: string }
 
 /**
+ * Refuses an order with nothing on it. Checked before either approval path
+ * writes anything, so a refused approval leaves the quote selection alone.
+ *
+ * Hand-made orders are created empty and filled on the order page
+ * (docs/manual-order-create.md); one abandoned halfway must not reach a label.
+ * dispatch_order() would not stop it -- it dispatches an order with no items
+ * and simply deducts nothing -- so this is the last point where an empty order
+ * is caught before a parcel is paid for.
+ */
+async function requireItems(
+  supabase: Client,
+  orderId: number
+): Promise<{ ok: boolean; error?: string }> {
+  const { count, error } = await supabase
+    .from("order_items")
+    .select("id, order_transactions!inner (order_id)", { count: "exact", head: true })
+    .eq("order_transactions.order_id", orderId)
+
+  if (error) return { ok: false, error: error.message }
+  if (!count) {
+    return { ok: false, error: "This order has no items. Add them on the order page first." }
+  }
+  return { ok: true }
+}
+
+/**
  * Commits the order to a carrier and hands it to label production.
  *
  * This is the one place the operator's decision is written. The quote engine
@@ -428,6 +454,9 @@ export async function approveQuotedOrder(
   const supabase = await createClient()
   const user = await currentUser(supabase)
   if (!user) return { success: false, error: "Your session has expired" }
+
+  const hasItems = await requireItems(supabase, orderId)
+  if (!hasItems.ok) return { success: false, error: hasItems.error }
 
   const { data: quote, error: quoteError } = await supabase
     .from("order_shipping_quotes")
@@ -505,6 +534,9 @@ export async function approveWithoutQuote(
   const supabase = await createClient()
   const user = await currentUser(supabase)
   if (!user) return { success: false, error: "Your session has expired" }
+
+  const hasItems = await requireItems(supabase, orderId)
+  if (!hasItems.ok) return { success: false, error: hasItems.error }
 
   // The chosen method need not match any quoted row, so no row may stay marked
   // selected -- the same reason updateOrderShippingMethod clears it when the

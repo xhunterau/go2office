@@ -13,6 +13,7 @@ import {
   fetchOrderTransactionsWithItems,
   type OrderTransaction,
 } from "@/lib/queries/orders"
+import { ALLOCATION_COUNTRY } from "@/lib/queries/allocation"
 import { escapeLike } from "@/lib/queries/search-params"
 import {
   SHIPPING_METHOD_OPTIONS,
@@ -20,9 +21,11 @@ import {
 } from "@/lib/orders/shipping-method"
 import { createClient } from "@/lib/supabase/server"
 import {
+  manualOrderCreateSchema,
   orderUpdateSchema,
   transactionCreateSchema,
   transactionUpdateSchema,
+  type ManualOrderCreateInput,
   type OrderUpdateInput,
   type TransactionCreateInput,
   type TransactionUpdateInput,
@@ -583,4 +586,74 @@ export async function createFollowUpOrder(
   revalidateOrder(created.id)
 
   return { success: true, data: { orderId: created.id, invoiceNumber } }
+}
+
+// create_manual_order raises this when the customer id points at nothing.
+const CUSTOMER_NOT_FOUND = "GO003"
+
+const manualOrderResultSchema = z.object({
+  order_id: z.number().int().positive(),
+  invoice_number: z.string().min(1),
+})
+
+/**
+ * Creates an empty pending `store` order for a customer (docs/manual-order-create.md).
+ *
+ * The order and its log line are one transaction in create_manual_order, which
+ * also numbers it by the same Laravel rule the imports use. Lines are added on
+ * the order page next; Allocation will not approve the order until it has some.
+ *
+ * The warning is not a failure: an order for a customer outside Australia is
+ * created like an imported one would be, and like one it does not enter the
+ * Allocation queues (CLAUDE.md rule 25), so the operator is told where it went.
+ */
+export async function createManualOrder(
+  input: ManualOrderCreateInput
+): Promise<ActionResult<{ orderId: number; invoiceNumber: string; warning?: string }>> {
+  const parsed = manualOrderCreateSchema.safeParse(input)
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" }
+  }
+  const { customer_id, postage_and_handling, discount, comments } = parsed.data
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Your session has expired" }
+
+  const { data, error } = await supabase.rpc("create_manual_order", {
+    p_customer_id: customer_id,
+    p_postage: postage_and_handling,
+    p_discount: discount,
+    p_comments: toNullable(comments),
+  })
+
+  if (error) {
+    if (error.code === CUSTOMER_NOT_FOUND) {
+      return { success: false, error: "That customer no longer exists. Pick another one." }
+    }
+    return { success: false, error: messageFor(error) }
+  }
+
+  const created = manualOrderResultSchema.safeParse(data)
+  if (!created.success) {
+    return { success: false, error: "The order was created but its number could not be read. Check the Orders list." }
+  }
+  const { order_id: orderId, invoice_number: invoiceNumber } = created.data
+
+  // Read after the write so a failure here cannot stop the order being made.
+  const { data: customer } = await supabase
+    .from("customers")
+    .select("country")
+    .eq("id", customer_id)
+    .maybeSingle()
+
+  const warning =
+    customer && customer.country !== ALLOCATION_COUNTRY
+      ? `The customer's country is ${customer.country?.trim() || "not set"}, so this order will not appear in Allocation. Move it on from the order page.`
+      : undefined
+
+  revalidateOrder(orderId)
+  return { success: true, data: { orderId, invoiceNumber, warning } }
 }

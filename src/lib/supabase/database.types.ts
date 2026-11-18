@@ -1797,6 +1797,23 @@ export type Database = {
       // transaction. p_picks is DispatchPick[] (src/lib/fulfillment/dispatch.ts).
       // Returns the stored, normalised tracking number. Errors: GO001 tracking
       // number on another order, GO002 not enough stock.
+      // Laravel invoice rule (YY + id as 6 hex digits), shared by imports and
+      // manual orders. Migration 20261118100000.
+      format_invoice_number: {
+        Args: { p_order_id: number }
+        Returns: string
+      }
+      // Empty pending `store` order + its log line. Migration 20261118100000;
+      // raises GO003 when the customer does not exist.
+      create_manual_order: {
+        Args: {
+          p_customer_id: number
+          p_postage?: number
+          p_discount?: number
+          p_comments?: string | null
+        }
+        Returns: Json
+      }
       dispatch_order: {
         Args: {
           p_order_id: number

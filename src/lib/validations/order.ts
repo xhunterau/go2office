@@ -11,6 +11,16 @@ const optionalText = (max: number, label: string) =>
     .optional()
     .or(z.literal(""))
 
+// A money amount the order holds as non-negative numeric(12,2): postage the
+// customer paid, discount. Shared so the edit form and the new-order form
+// cannot disagree about what a valid amount is.
+const nonNegativeMoney = (label: string) =>
+  z
+    .number({ message: `${label} must be a number` })
+    .min(0, `${label} cannot be negative`)
+    .max(99999.99, `${label} is too large`)
+    .multipleOf(0.01, `${label} cannot have more than two decimal places`)
+
 // Editable order fields.
 //
 // Deliberately absent:
@@ -35,11 +45,7 @@ export const orderUpdateSchema = z.object({
   // Nullable: 375 orders have no carrier at all, and the seven retired ones are
   // not offered as options.
   shipping_method: z.enum(SHIPPING_METHOD_OPTIONS).nullable(),
-  postage_and_handling: z
-    .number({ message: "Postage must be a number" })
-    .min(0, "Postage cannot be negative")
-    .max(99999.99, "Postage is too large")
-    .multipleOf(0.01, "Postage cannot have more than two decimal places"),
+  postage_and_handling: nonNegativeMoney("Postage"),
   // 200, not 100: the field is normally filled by scanning the carrier label,
   // and a raw GS1-128 scan runs to 117 characters here. The column is plain
   // text and normalize_tracking_number() cuts the scan down to the article ID
@@ -116,3 +122,19 @@ export const transactionCreateSchema = transactionUpdateSchema.superRefine(
 )
 
 export type TransactionCreateInput = z.infer<typeof transactionCreateSchema>
+
+// A hand-made order (docs/manual-order-create.md).
+//
+// Only what the order itself holds. The customer is picked or created in the
+// shared picker first; lines are added on the order page afterwards with the
+// Add line dialog; the shipping method is decided in Allocation, as for every
+// imported order. Platform and status are not inputs: create_manual_order
+// always writes `store` / `pending`.
+export const manualOrderCreateSchema = z.object({
+  customer_id: z.number().int().positive("Select a customer"),
+  postage_and_handling: nonNegativeMoney("Postage"),
+  discount: nonNegativeMoney("Discount"),
+  comments: optionalText(2000, "Comments"),
+})
+
+export type ManualOrderCreateInput = z.infer<typeof manualOrderCreateSchema>

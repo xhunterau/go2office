@@ -470,6 +470,8 @@ Customer 卡片右上角两个按钮，对应"这张订单的客户"能出的两
 | 菜单项 | 行为 |
 |---|---|
 | `Create follow-up order` | `createFollowUpOrder(orderId)` → 新标签打开新订单 |
+
+> 2026-11-18：`/orders` 页头另有 `New order`（不依附于原单的手工单），见 `docs/manual-order-create.md`。两者都是 `platform = store`，发票号规则不同：follow-up 用「原单号@n」，手工单用 `format_invoice_number()`。
 | `Print invoice` | 新标签打开 `/api/print/invoice?ids=<id>` |
 | `Print shipping label` | 新标签打开 `/api/print/shipping-label?ids=<id>` |
 

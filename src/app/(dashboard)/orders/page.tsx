@@ -13,6 +13,7 @@ import { OrdersFilters } from "./_components/orders-filters"
 import { OrdersStatusTabs } from "./_components/orders-status-tabs"
 import { ShopifyImportButton } from "./_components/shopify-import-button"
 import { EbayImportButton } from "@/app/(dashboard)/orders/_components/ebay-import-button"
+import { NewOrderButton } from "@/app/(dashboard)/orders/_components/new-order-button"
 
 export default async function OrdersPage({
   searchParams,
@@ -47,6 +48,7 @@ export default async function OrdersPage({
         <div className="flex flex-wrap items-start gap-2">
           <EbayImportButton testOrder={ebayDebug.value} authorization={ebayAuthorization} />
           <ShopifyImportButton testOrder={shopifyDebug.value} />
+          <NewOrderButton />
         </div>
       </div>
 

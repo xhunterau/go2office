@@ -192,3 +192,8 @@
 - **`queuePlatformFulfillment` 不可放进 `"use server"` 文件**：它接收 `userId` 参数，`"use server"` 文件的每个导出都能从浏览器调用，放进去等于让任何人以他人名义写日志。
 - **`authenticated` 对这张表只有 SELECT 和「只能插 pending 新行」的 INSERT 策略**：结果列只由 service role 写。Retry 是去触发 Task，不是去改行——不要为了 Retry 补 UPDATE 策略。
 
+# 28. 手动建单（create_manual_order）
+- **范围**：`/orders` 的 `New order` 先选/建客户，再调用 `create_manual_order()`（迁移 `20261118100000`）建一张空的 `pending` / `store` 单，商品行在订单页用现有 `Add line` 添加，之后走 Allocation → Export labels → Dispatch。详见 `docs/manual-order-create.md`。
+- **发票号只有一份公式**：`public.format_invoice_number(bigint)`，`import_platform_order()` 与 `create_manual_order()` 都调用它。严禁在任何新的建单路径里再内联 `to_hex` 拼接，两份公式漂移会让不同来源的订单编号规则悄悄不一致。
+- **空订单必须在 Allocation 批准时被拦下**：`requireItems()`（`src/lib/actions/allocation.ts`）在两条批准路径的任何写入之前执行。`dispatch_order()` 会照常发出没有商品的订单（只是不扣库存），所以这是面单花钱之前最后一道关，不可删除，新增批准路径时也要调用它。
+
