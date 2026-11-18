@@ -23,10 +23,21 @@ import type { RunProgress } from "@/lib/trigger/run-status"
 
 type QueueKey = "self-print" | "mypost" | "eparcel" | "aramex"
 
-function downloadCsv(csv: string, filename: string): void {
-  // A BOM, so Excel opens the file as UTF-8 instead of guessing the local
-  // codepage and mangling any non-ASCII name in it.
-  const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8;" })
+// eParcel's importer reads a leading BOM as part of the first header, so the
+// mandatory C_CHARGE_CODE column arrives as "\uFEFFC_CHARGE_CODE", is not
+// recognised, and the whole batch is rejected. xpros never wrote one, which is
+// why its files imported. MyPost has not had this problem, so it keeps the BOM.
+const CSV_BOM: Record<Exclude<QueueKey, "self-print" | "aramex">, boolean> = {
+  mypost: true,
+  eparcel: false,
+}
+
+function downloadCsv(csv: string, filename: string, withBom: boolean): void {
+  // The BOM makes Excel open the file as UTF-8 instead of guessing the local
+  // codepage and mangling any non-ASCII name in it -- but see CSV_BOM.
+  const blob = new Blob(withBom ? ["\uFEFF", csv] : [csv], {
+    type: "text/csv;charset=utf-8;",
+  })
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
 
@@ -94,7 +105,7 @@ export function ExportLabelsClient({
   })
 
   async function runCsvExport(
-    key: Exclude<QueueKey, "self-print">,
+    key: keyof typeof CSV_BOM,
     action: () => Promise<ActionResult<CsvExportResult>>,
     label: string
   ) {
@@ -108,7 +119,7 @@ export function ExportLabelsClient({
         return
       }
 
-      downloadCsv(result.data.csv, result.data.filename)
+      downloadCsv(result.data.csv, result.data.filename, CSV_BOM[key])
       toast.success(
         `${result.data.count} order${result.data.count > 1 ? "s" : ""} exported`,
         { description: result.data.filename }
