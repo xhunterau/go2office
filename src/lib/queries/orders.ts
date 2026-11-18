@@ -3,6 +3,10 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { Database } from "@/lib/supabase/database.types"
 import { orderNumberCandidates } from "@/lib/orders/platform-order-number"
 import {
+  SHIPPING_METHOD_OPTIONS,
+  type ShippingMethod,
+} from "@/lib/orders/shipping-method"
+import {
   dateParam,
   enumParam,
   escapeLike,
@@ -87,6 +91,9 @@ export type StatusTab = OrderStatus | typeof NEEDS_ACTION | null
 export type OrderFilters = {
   status: StatusTab
   platform: SalesPlatform | null
+  // Current enum values only. The seven retired carriers live in
+  // legacy_shipping_method and are not offered, matching the order form.
+  shippingMethod: ShippingMethod | null
   notDispatched: boolean
   createdFrom: string | null
   createdTo: string | null
@@ -105,6 +112,7 @@ export function parseOrderFilters(params: SearchParams): OrderFilters {
   return {
     status,
     platform: enumParam(params, "platform", SALES_PLATFORMS),
+    shippingMethod: enumParam(params, "method", SHIPPING_METHOD_OPTIONS),
     notDispatched: flagParam(params, "notDispatched"),
     createdFrom: dateParam(params, "from"),
     createdTo: dateParam(params, "to"),
@@ -362,6 +370,9 @@ export async function fetchOrderList(
   }
 
   if (filters.platform) query = query.eq("platform", filters.platform)
+  if (filters.shippingMethod) {
+    query = query.eq("shipping_method", filters.shippingMethod)
+  }
 
   // Independent of status on purpose: 4497 completed orders were never
   // dispatched and 113 cancelled ones were, so no status filter finds this set

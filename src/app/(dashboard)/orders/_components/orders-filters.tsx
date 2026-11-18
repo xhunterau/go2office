@@ -6,6 +6,11 @@ import { X } from "lucide-react"
 
 import { ORDER_STATUSES, SALES_PLATFORMS } from "@/lib/queries/orders"
 import {
+  SHIPPING_METHOD_LABELS,
+  SHIPPING_METHOD_OPTIONS,
+} from "@/lib/orders/shipping-method"
+import { cn } from "@/lib/utils"
+import {
   ORDER_STATUS_LABELS,
   SALES_PLATFORM_LABELS,
 } from "@/lib/orders/status"
@@ -28,6 +33,7 @@ const ALL = "all"
 const FILTER_KEYS = [
   "status",
   "platform",
+  "method",
   "notDispatched",
   "from",
   "to",
@@ -93,6 +99,19 @@ export function OrdersFilters() {
         onChange={(value) => commit({ platform: value === ALL ? null : value })}
       />
 
+      {/* Wider than the others: "MyPost Exp XL Satchel" does not fit in w-40. */}
+      <SelectFilter
+        label="Shipping method"
+        value={searchParams.get("method") ?? ALL}
+        placeholder="All methods"
+        className="w-56"
+        options={SHIPPING_METHOD_OPTIONS.map((value) => ({
+          value,
+          label: SHIPPING_METHOD_LABELS[value],
+        }))}
+        onChange={(value) => commit({ method: value === ALL ? null : value })}
+      />
+
       <div className="grid gap-1.5">
         <Label htmlFor="orders-filter-from" className="text-xs text-muted-foreground">
           Created from
@@ -156,18 +175,21 @@ function SelectFilter({
   placeholder,
   options,
   onChange,
+  className,
 }: {
   label: string
   value: string
   placeholder: string
   options: { value: string; label: string }[]
   onChange: (value: string) => void
+  /** Trigger width; defaults to w-40. */
+  className?: string
 }) {
   return (
     <div className="grid gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger className="w-40">
+        <SelectTrigger className={cn("w-40", className)}>
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>

@@ -253,6 +253,7 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 **其余下拉 / 开关筛选**
 
 - `Platform`（Select）
+- `Shipping method`（Select，URL 参数 `method`，2026-11-18 新增）：选项取 `SHIPPING_METHOD_OPTIONS`，即当前枚举的 30 个值；7 个已停用承运商在 `legacy_shipping_method` 里，**不提供筛选**，与订单表单下拉同一口径。索引 `orders_shipping_method_idx`（迁移 `20261118140000`）——没有它，选一个冷门方式时列表与计数都是全表扫
 - **`Not dispatched`（Switch）**：`posted_on_date IS NULL`，4,919 张。**它与状态 tab 不重复**——§4.2.1 实测有 4,497 张 completed 却没发货、113 张 cancelled 却发了货，状态筛不出这批
 - 日期区间（`created_at`），默认不限
 
