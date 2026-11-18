@@ -1839,6 +1839,35 @@ export type Database = {
         Args: Record<string, never>
         Returns: number
       }
+      // Dashboard aggregates (migration 20261118120000). Both SECURITY
+      // INVOKER and read-only. Orders and sales are bucketed by created_at,
+      // shipments by posted_on_date, in Sydney time; cancelled orders are
+      // excluded. `bucket` comes back as a YYYY-MM-DD string.
+      dashboard_sales_series: {
+        Args: { p_grain: "day" | "month"; p_from: string }
+        Returns: {
+          bucket: string
+          platform: Database["public"]["Enums"]["sales_platform"]
+          order_count: number
+          sales: number
+          shipped_count: number
+        }[]
+      }
+      // Products sold in the last p_window_days whose stock covers fewer than
+      // p_cover_days at that rate, most urgent first. total_count is the
+      // pre-limit total, repeated on every row.
+      dashboard_low_stock: {
+        Args: { p_window_days?: number; p_cover_days?: number; p_limit?: number }
+        Returns: {
+          product_id: number
+          sku: string
+          name: string | null
+          on_hand: number
+          sold_qty: number
+          days_of_cover: number
+          total_count: number
+        }[]
+      }
       // Two more functions exist in the schema and are deliberately absent here,
       // because both are revoked from PUBLIC and cannot be called through
       // PostgREST (migrations 20260808170000 and 20260808190000):

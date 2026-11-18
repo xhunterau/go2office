@@ -164,19 +164,46 @@ function toAllocationOrder(row: RawOrder): AllocationOrder {
   }
 }
 
-function countQueue(
-  client: Client,
-  verified: boolean
-): PromiseLike<{ count: number | null; error: { message: string } | null }> {
+// The one definition of each queue's filter. `head` drops the rows and keeps
+// the count; without it the caller can order and limit to read the oldest.
+function queueQuery(client: Client, verified: boolean, head: boolean) {
   const query = client
     .from("orders")
-    .select("id, customers!inner (country)", { count: "exact", head: true })
+    .select("created_at, customers!inner (country)", { count: "exact", head })
     .eq("status", ALLOCATION_STATUS)
     .eq("customers.country", ALLOCATION_COUNTRY)
 
   return verified
     ? query.not("address_verified_at", "is", null)
     : query.is("address_verified_at", null)
+}
+
+function countQueue(
+  client: Client,
+  verified: boolean
+): PromiseLike<{ count: number | null; error: { message: string } | null }> {
+  return queueQuery(client, verified, true)
+}
+
+export type QueueStat = {
+  count: number
+  /** created_at of the oldest order in the queue; null when it is empty. */
+  oldestCreatedAt: string | null
+}
+
+/** Size and oldest order of one allocation queue, in a single round trip. */
+export async function fetchAllocationQueueStat(
+  client: Client,
+  verified: boolean
+): Promise<Loaded<QueueStat>> {
+  const { data, count, error } = await queueQuery(client, verified, false)
+    .order("created_at", { ascending: true })
+    .limit(1)
+  if (error) return { data: null, error: error.message }
+  return {
+    data: { count: count ?? 0, oldestCreatedAt: data?.[0]?.created_at ?? null },
+    error: null,
+  }
 }
 
 export async function countAddressQueue(client: Client): Promise<Loaded<number>> {
