@@ -75,6 +75,28 @@ export const MANUAL_APPROVAL_METHODS = [
   ...ARAMEX_METHODS,
 ] as const satisfies readonly ShippingMethod[]
 
+/**
+ * One-click approvals offered on every order in the Postage dialog.
+ *
+ * These methods have no rate table, so the quote engine never returns a row for
+ * them and they would otherwise only be reachable through "Approve without a
+ * quote". postage_paid is what WE pay the carrier (stamps for a letter; a
+ * Parcel Post satchel is bought in advance, so nothing is owed per order) --
+ * not what the customer paid, which is postage_and_handling.
+ *
+ * Typed against MANUAL_APPROVAL_METHODS so a method with no label channel can
+ * never be added here (CLAUDE.md rule 25).
+ */
+export const QUICK_APPROVALS = [
+  { shipping_method: "Letter", postage_paid: 2.5 },
+  { shipping_method: "Parcel_Post", postage_paid: 0 },
+] as const satisfies readonly {
+  shipping_method: (typeof MANUAL_APPROVAL_METHODS)[number]
+  postage_paid: number
+}[]
+
+export type QuickApproval = (typeof QUICK_APPROVALS)[number]
+
 const manualMethodSchema = z.enum(
   MANUAL_APPROVAL_METHODS as unknown as [ShippingMethod, ...ShippingMethod[]]
 )

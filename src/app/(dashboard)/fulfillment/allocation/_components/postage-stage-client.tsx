@@ -21,6 +21,7 @@ import { useConfirm } from "@/components/providers/confirm-provider"
 import { useBatchRunPoll } from "@/hooks/use-batch-run-poll"
 import {
   approveQuotedOrder,
+  approveWithoutQuote,
   getPostageCheckStatus,
   triggerPostageCheck,
 } from "@/lib/actions/allocation"
@@ -30,6 +31,7 @@ import type { ShippingQuoteRow } from "@/lib/queries/shipping-quotes"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { formatDate, formatMoney, formatWeightKg } from "@/lib/format"
+import type { QuickApproval } from "@/lib/validations/allocation"
 import type { BatchPostageCheckResult } from "@/trigger/batch-postage-check"
 
 import { InfoHint } from "./info-hint"
@@ -42,6 +44,9 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
   const [openOrderId, setOpenOrderId] = React.useState<number | null>(null)
   const [approvingQuote, setApprovingQuote] = React.useState<number | null>(null)
   const [requoting, setRequoting] = React.useState<number | null>(null)
+  const [quickApproving, setQuickApproving] = React.useState<
+    QuickApproval["shipping_method"] | null
+  >(null)
   const [manualOrder, setManualOrder] = React.useState<PostageStageOrder | null>(null)
   const [isStarting, startBatch] = React.useTransition()
 
@@ -120,6 +125,36 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
     })
     if (result.data?.warning) toast.warning(result.data.warning)
     // The order has left the queue, so there is nothing left to look at.
+    setOpenOrderId(null)
+    router.refresh()
+  }
+
+  async function handleQuickApprove(order: PostageStageOrder, approval: QuickApproval) {
+    const label = SHIPPING_METHOD_LABELS[approval.shipping_method]
+    const ok = await confirm({
+      title: `Approve ${order.invoice_number}?`,
+      description: `${label} at ${formatMoney(approval.postage_paid)}. The order moves to Processing and appears on Export Labels; it cannot be sent back from here.`,
+      confirmText: "Approve",
+    })
+    if (!ok) return
+
+    setQuickApproving(approval.shipping_method)
+    // The existing manual path: same validation, same method allow-list, same
+    // order log -- only the method and cost are fixed rather than typed.
+    const result = await approveWithoutQuote(order.id, {
+      shipping_method: approval.shipping_method,
+      postage_paid: approval.postage_paid,
+    })
+    setQuickApproving(null)
+
+    if (!result.success) {
+      toast.error("The order could not be approved", { description: result.error })
+      return
+    }
+    toast.success(`${order.invoice_number} approved`, {
+      description: `${label} at ${formatMoney(approval.postage_paid)} — now in Processing.`,
+    })
+    if (result.data?.warning) toast.warning(result.data.warning)
     setOpenOrderId(null)
     router.refresh()
   }
@@ -225,8 +260,12 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
           if (next) setOpenOrderId(next.id)
         }}
         approvingQuote={approvingQuote}
+        quickApproving={quickApproving}
+        onQuickApprove={(approval) => {
+          if (openOrder) void handleQuickApprove(openOrder, approval)
+        }}
         requoting={openOrder !== null && requoting === openOrder.id}
-        disabled={busy}
+        disabled={busy || quickApproving !== null}
         onApprove={(quote) => {
           if (openOrder) void handleApprove(openOrder, quote)
         }}

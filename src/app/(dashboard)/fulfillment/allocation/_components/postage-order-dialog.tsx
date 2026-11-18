@@ -49,6 +49,7 @@ import type { ShippingQuoteRow } from "@/lib/queries/shipping-quotes"
 import { shortenItemTitle } from "@/lib/orders/item-title"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
+import { QUICK_APPROVALS, type QuickApproval } from "@/lib/validations/allocation"
 // The one implementation of "which of the four address lines belong on a
 // label". 114,161 of the 114,193 non-empty address_line3 values are `ebay:xxxx`
 // reference codes rather than addresses, so concatenating the columns puts an
@@ -87,6 +88,8 @@ export function PostageOrderDialog({
   requoting,
   disabled,
   onApprove,
+  quickApproving,
+  onQuickApprove,
   onRequote,
   onManual,
   onOpenChange,
@@ -100,6 +103,9 @@ export function PostageOrderDialog({
   requoting: boolean
   disabled: boolean
   onApprove: (quote: ShippingQuoteRow) => void
+  /** The quick-approval method in flight, if any. */
+  quickApproving: QuickApproval["shipping_method"] | null
+  onQuickApprove: (approval: QuickApproval) => void
   onRequote: () => void
   onManual: () => void
   onOpenChange: (open: boolean) => void
@@ -238,6 +244,13 @@ export function PostageOrderDialog({
               />
             )}
           </section>
+
+          <QuickApprovals
+            received={order.postage_and_handling}
+            approving={quickApproving}
+            disabled={disabled || approvingQuote !== null}
+            onApprove={onQuickApprove}
+          />
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
             {/* Walking the queue without closing the dialog: 21 orders at one
@@ -733,6 +746,61 @@ function QuoteTable({
         </TableBody>
       </Table>
     </div>
+  )
+}
+
+/**
+ * Methods with no rate table, offered on every order whatever was quoted.
+ *
+ * The engine never returns a row for these, so without this they are only
+ * reachable through "Approve without a quote" and a typed number. The cost is
+ * fixed in QUICK_APPROVALS.
+ */
+function QuickApprovals({
+  received,
+  approving,
+  disabled,
+  onApprove,
+}: {
+  received: number
+  approving: QuickApproval["shipping_method"] | null
+  disabled: boolean
+  onApprove: (approval: QuickApproval) => void
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        Without a rate
+      </h3>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {QUICK_APPROVALS.map((approval) => (
+          <div
+            key={approval.shipping_method}
+            className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2"
+          >
+            <div className="flex flex-col">
+              <span className="text-sm font-medium">
+                {SHIPPING_METHOD_LABELS[approval.shipping_method]}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Cost <Margin rate={approval.postage_paid} received={received} />
+              </span>
+            </div>
+            <Button
+              size="sm"
+              className="h-7 px-2 text-xs"
+              disabled={disabled || approving !== null}
+              onClick={() => onApprove(approval)}
+            >
+              {approving === approval.shipping_method ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              Approve
+            </Button>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
