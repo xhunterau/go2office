@@ -85,7 +85,7 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 ### 3.2 `/fulfillment/dispatch/[id]`
 
 - 页面上依次是：发票号、平台、承运方式、收货地址（经 `usableAddressLines()`，不显示 `ebay:` 引用码，规则 24）。
-- **客户备注**（`orders.comments`）：有备注时必须点 `I have read the note`，否则 `Dispatch` 按钮不可用。
+- **客户备注**（`orders.comments`）：有备注时以醒目卡片显示，**不需要确认**，不影响 `Dispatch` 与扫码（2026-11-18 用户决策，去掉了原先的 `I have read the note` 关卡）。
 - **商品列表**（卡片）：
   - 每行是一个 `order_items` 行（套装已拆成单品）。
   - 库位默认选中「库存最多、且能覆盖整张订单对该商品需求量」的那个，同一商品的多行会合并计算。
@@ -239,7 +239,7 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 |---|---|---|
 | 1 | 侧边栏 Sales → Dispatch | 只有搜索框且已获得焦点，显示等待发货数 |
 | 2 | 搜发票号 `2603247F`，或搜客户名 | 出结果表，点发票号进详情 |
-| 3 | 有客户备注的订单 | `Dispatch` 按钮不可用，点 `I have read the note` 后可用，焦点跳到运单号框 |
+| 3 | 有客户备注的订单 | 备注以黄色卡片显示，无需确认，可直接扫运单号发货 |
 | 4 | 已有运单号的订单 | 只读显示；点 `Re-enter` 后可编辑且全选 |
 | 5 | 扫/输运单号 → Dispatch → 确认 | toast 成功，回到搜索页；`/orders/[id]` 状态 `completed`、日志有出库明细；`/inventory` 库存已扣 |
 | 6 | 用另一张单已有的运单号 | 弹「Tracking number already used」，确认后才发货 |

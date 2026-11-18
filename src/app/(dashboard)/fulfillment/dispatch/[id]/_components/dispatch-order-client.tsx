@@ -38,7 +38,6 @@ import type { DispatchItem } from "@/lib/queries/dispatch"
 import type { ProductStockLine } from "@/lib/queries/inventory"
 import type { LocationOption } from "@/lib/queries/locations"
 import type { OrderDetail } from "@/lib/queries/orders"
-import { cn } from "@/lib/utils"
 import { trackingFormSchema, type TrackingFormValues } from "@/lib/validations/dispatch"
 
 import { DispatchItemsList } from "./dispatch-items-list"
@@ -97,7 +96,6 @@ export function DispatchOrderClient({
   )
 
   const note = order.comments?.trim() || null
-  const [noteRead, setNoteRead] = React.useState(note === null)
 
   // An existing number (Aramex writes one when it books) is shown locked; the
   // operator unlocks it only to replace it.
@@ -127,7 +125,6 @@ export function DispatchOrderClient({
       `${unresolved} ${unresolved === 1 ? "item has" : "items have"} an unresolved SKU.`,
     unresolved === 0 && dispatchPicks === null && "Choose a location for every item.",
     shortages.length > 0 && "Not enough stock at the chosen location. Fix the stock or pick another location.",
-    !noteRead && "Read the customer note first.",
   ].filter((reason): reason is string => Boolean(reason))
 
   const totalUnits = items.reduce((sum, item) => sum + item.quantity, 0)
@@ -150,11 +147,6 @@ export function DispatchOrderClient({
           action: { label: "Open it", onClick: () => router.push(`/fulfillment/dispatch?q=${encodeURIComponent(value)}`) },
         })
       }
-      return
-    }
-
-    if (!noteRead) {
-      toast.warning("Read the customer note first", { description: "Then scan the label again." })
       return
     }
 
@@ -275,28 +267,15 @@ export function DispatchOrderClient({
         ) : null}
       </section>
 
+      {/* Shown, not gated: go2office does not make the packer acknowledge the
+          note before dispatching (user decision, 2026-11-18). */}
       {note ? (
-        <section
-          className={cn(
-            "flex flex-col gap-3 rounded-2xl border p-5",
-            noteRead ? "border-border bg-card" : "border-warning/60 bg-warning/10"
-          )}
-        >
+        <section className="flex flex-col gap-3 rounded-2xl border border-warning/60 bg-warning/10 p-5">
           <p className="flex items-center gap-2 text-base font-medium text-foreground">
             <MessageSquareWarning className="size-5" />
             Customer note
           </p>
           <p className="text-base whitespace-pre-wrap text-foreground">{note}</p>
-          {noteRead ? (
-            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <CheckCircle2 className="size-4 text-success-foreground" />
-              Note read
-            </p>
-          ) : (
-            <Button size="lg" className="h-12 self-start px-6 text-base" onClick={() => setNoteRead(true)}>
-              I have read the note
-            </Button>
-          )}
         </section>
       ) : null}
 
