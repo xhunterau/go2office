@@ -253,6 +253,7 @@ HTTP 400  {"code":"PGRST123","message":"Use of aggregate functions is not allowe
 **其余下拉 / 开关筛选**
 
 - `Platform`（Select）
+- **批量修改（2026-11-18 新增）**：`OrdersTable` 的 `selectable` 只在 `/orders` 打开，勾选**仅限当前页**（页面以 `key={JSON.stringify(filters)}` 重挂载表格来清空选择），上限 100。`bulkUpdateOrders` 一次改 status 和/或 shipping method，`.select("id")` 读回并比对行数（规则 22），改了承运商就清 `is_selected`（同 `updateOrderShippingMethod`），每单写一条 `order_logs` 记录改前→改后。**状态下拉不提供 `completed`**（`BULK_ORDER_STATUSES`）——完成订单必须走 `dispatch_order()` 才会扣库存、写拣货库位、排队回写平台（规则 26、27）。**落到 `processing` 而方式不在标签通道内（含 null）时整批拒绝**，否则订单在 Export Labels 上永远不出现（规则 24、25）
 - `Shipping method`（Select，URL 参数 `method`，2026-11-18 新增）：选项取 `SHIPPING_METHOD_OPTIONS`，即当前枚举的 30 个值；7 个已停用承运商在 `legacy_shipping_method` 里，**不提供筛选**，与订单表单下拉同一口径。索引 `orders_shipping_method_idx`（迁移 `20261118140000`）——没有它，选一个冷门方式时列表与计数都是全表扫
 - **`Not dispatched`（Switch）**：`posted_on_date IS NULL`，4,919 张。**它与状态 tab 不重复**——§4.2.1 实测有 4,497 张 completed 却没发货、113 张 cancelled 却发了货，状态筛不出这批
 - 日期区间（`created_at`），默认不限

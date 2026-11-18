@@ -16,15 +16,22 @@ import {
 import { ALLOCATION_COUNTRY } from "@/lib/queries/allocation"
 import { escapeLike } from "@/lib/queries/search-params"
 import {
+  SHIPPING_METHOD_LABELS,
   SHIPPING_METHOD_OPTIONS,
+  displayShippingMethod,
   type ShippingMethod,
 } from "@/lib/orders/shipping-method"
+import { ORDER_STATUS_LABELS } from "@/lib/orders/status"
+import { MANUAL_APPROVAL_METHODS } from "@/lib/validations/allocation"
 import { createClient } from "@/lib/supabase/server"
 import {
+  bulkOrderChangesSchema,
+  bulkOrderIdsSchema,
   manualOrderCreateSchema,
   orderUpdateSchema,
   transactionCreateSchema,
   transactionUpdateSchema,
+  type BulkOrderChanges,
   type ManualOrderCreateInput,
   type OrderUpdateInput,
   type TransactionCreateInput,
@@ -656,4 +663,133 @@ export async function createManualOrder(
 
   revalidateOrder(orderId)
   return { success: true, data: { orderId, invoiceNumber, warning } }
+}
+
+// Methods that have a label channel. An order in `processing` on any other
+// method -- or on none -- never appears on /fulfillment/export-labels, so the
+// bulk edit refuses to leave one there (CLAUDE.md rules 24 and 25).
+const ROUTED_METHODS: ReadonlySet<string> = new Set(MANUAL_APPROVAL_METHODS)
+
+/**
+ * Sets status and/or shipping method on several orders at once (/orders bulk bar).
+ *
+ * Reads the orders first, for two reasons: the processing guard needs each
+ * order's resulting method, which is the current one when only the status is
+ * being changed; and the order log records what each order changed FROM.
+ *
+ * One UPDATE for the lot, read back and counted: RLS refuses an UPDATE by
+ * returning no rows rather than raising (rule 22), so a short count is the
+ * only sign that some of the selection was not written.
+ */
+export async function bulkUpdateOrders(
+  ids: number[],
+  changes: BulkOrderChanges
+): Promise<ActionResult<{ updated: number; warning?: string }>> {
+  const parsedIds = bulkOrderIdsSchema.safeParse(ids)
+  if (!parsedIds.success) {
+    return { success: false, error: parsedIds.error.issues[0]?.message ?? "Invalid selection" }
+  }
+  const parsed = bulkOrderChangesSchema.safeParse(changes)
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" }
+  }
+  const orderIds = parsedIds.data
+  const { status, shipping_method } = parsed.data
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Your session has expired" }
+
+  const { data: current, error: readError } = await supabase
+    .from("orders")
+    .select("id, invoice_number, status, shipping_method, legacy_shipping_method")
+    .in("id", orderIds)
+
+  if (readError) return { success: false, error: readError.message }
+  if (!current || current.length !== orderIds.length) {
+    return {
+      success: false,
+      error: "Some of the selected orders no longer exist. Reload the page and try again.",
+    }
+  }
+
+  const stranded = current.filter((order) => {
+    const nextStatus = status ?? order.status
+    const nextMethod = shipping_method ?? order.shipping_method
+    return nextStatus === "processing" && (nextMethod === null || !ROUTED_METHODS.has(nextMethod))
+  })
+  if (stranded.length > 0) {
+    const names = stranded.map((order) => order.invoice_number).join(", ")
+    return {
+      success: false,
+      error: `These orders would be in Processing with a shipping method Export Labels cannot produce a label for, so they would never appear there: ${names}. Choose a method such as Parcel Post or a MyPost / eParcel / Aramex service.`,
+    }
+  }
+
+  const patch: { status?: typeof status; shipping_method?: typeof shipping_method } = {}
+  if (status !== undefined) patch.status = status
+  if (shipping_method !== undefined) patch.shipping_method = shipping_method
+
+  const { data: updated, error: updateError } = await supabase
+    .from("orders")
+    .update(patch)
+    .in("id", orderIds)
+    .select("id")
+
+  if (updateError) return { success: false, error: messageFor(updateError) }
+  const updatedCount = updated?.length ?? 0
+  if (updatedCount !== orderIds.length) {
+    return {
+      success: false,
+      error: `Only ${updatedCount} of ${orderIds.length} orders were updated. Reload the page to see their current state.`,
+    }
+  }
+
+  const warnings: string[] = []
+
+  // Same as updateOrderShippingMethod: a method set by hand no longer follows
+  // the selected quote, so the flag goes. The quote rows stay (rule 23).
+  if (shipping_method !== undefined) {
+    const { error: quoteError } = await supabase
+      .from("order_shipping_quotes")
+      .update({ is_selected: false })
+      .in("order_id", orderIds)
+      .eq("is_selected", true)
+    if (quoteError) {
+      warnings.push(`The previously selected quotes are still marked selected: ${quoteError.message}`)
+    }
+  }
+
+  const { error: logError } = await supabase.from("order_logs").insert(
+    current.map((order) => {
+      const parts: string[] = []
+      if (status !== undefined && status !== order.status) {
+        parts.push(`status ${ORDER_STATUS_LABELS[order.status]} → ${ORDER_STATUS_LABELS[status]}`)
+      }
+      if (shipping_method !== undefined && shipping_method !== order.shipping_method) {
+        parts.push(
+          `shipping method ${displayShippingMethod(order).label} → ${SHIPPING_METHOD_LABELS[shipping_method]}`
+        )
+      }
+      return {
+        order_id: order.id,
+        action: parts.length > 0 ? `Bulk edit: ${parts.join("; ")}` : "Bulk edit: no change",
+        user_id: user.id,
+      }
+    })
+  )
+  // The orders have changed by now; reporting failure would invite a retry of
+  // a write that already happened. Same trade-off as the export path (rule 24).
+  if (logError) warnings.push(`The order log was not written: ${logError.message}`)
+
+  revalidatePath("/orders")
+  revalidatePath("/customers", "layout")
+  for (const id of orderIds) revalidatePath(`/orders/${id}`)
+
+  return {
+    success: true,
+    data: { updated: updatedCount, warning: warnings.length > 0 ? warnings.join(" ") : undefined },
+  }
 }

@@ -138,3 +138,46 @@ export const manualOrderCreateSchema = z.object({
 })
 
 export type ManualOrderCreateInput = z.infer<typeof manualOrderCreateSchema>
+
+// ── bulk edit on /orders ───────────────────────────────────────────────────
+
+/**
+ * Statuses the bulk toolbar may set: every status except `completed`.
+ *
+ * Completing an order is dispatch_order()'s job -- it deducts stock, records
+ * the pick locations and queues the tracking push to Shopify / eBay in one
+ * transaction (CLAUDE.md rules 26 and 27). A bulk "completed" would skip all
+ * three silently. The single-order edit dialog still offers it, one order at a
+ * time, for historical clean-up.
+ */
+export const BULK_ORDER_STATUSES = [
+  "pending",
+  "unpaid",
+  "backorder",
+  "processing",
+  "labelled",
+  "issued",
+  "cancelled",
+] as const satisfies readonly (typeof ORDER_STATUSES)[number][]
+
+/** One page of /orders is 20 rows; the cap is headroom, not a target. */
+export const BULK_ORDER_MAX = 100
+
+/** What to change. Either field alone is a valid change; neither is not. */
+export const bulkOrderChangesSchema = z
+  .object({
+    status: z.enum(BULK_ORDER_STATUSES).optional(),
+    shipping_method: z.enum(SHIPPING_METHOD_OPTIONS).optional(),
+  })
+  .refine(
+    (value) => value.status !== undefined || value.shipping_method !== undefined,
+    { message: "Choose a status or a shipping method to change" }
+  )
+
+export type BulkOrderChanges = z.infer<typeof bulkOrderChangesSchema>
+
+export const bulkOrderIdsSchema = z
+  .array(z.number().int().positive())
+  .min(1, "Select at least one order")
+  .max(BULK_ORDER_MAX, `At most ${BULK_ORDER_MAX} orders can be changed at once`)
+  .refine((ids) => new Set(ids).size === ids.length, "Duplicate order ids")

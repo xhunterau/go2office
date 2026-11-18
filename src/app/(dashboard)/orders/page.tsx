@@ -65,6 +65,10 @@ export default async function OrdersPage({
       ) : (
         <>
           <OrdersTable
+            // Remounting on every page or filter change is what clears the
+            // bulk selection: it is scoped to the rows on screen.
+            key={JSON.stringify(filters)}
+            selectable
             rows={list.rows}
             emptyMessage={
               // "No such SKU" and "this SKU has never sold" are different
