@@ -93,9 +93,9 @@ describe("platform carrier names", () => {
     expect(ebayCarrierCode("australia_post")).toBe("AustraliaPost")
   })
 
-  // Remove this test, not the throw, once the user has confirmed the code.
-  it("refuses eBay Aramex until its code is confirmed", () => {
-    expect(EBAY_CARRIER_CODE.aramex).toBeNull()
-    expect(() => ebayCarrierCode("aramex")).toThrow(/not been confirmed/)
+  // eBay AU has no Aramex entry; Fastway is its former name (user decision, 2026-11-18).
+  it("sends Aramex to eBay as FASTWAYCOURIERS", () => {
+    expect(EBAY_CARRIER_CODE).toEqual({ australia_post: "AustraliaPost", aramex: "FASTWAYCOURIERS" })
+    expect(ebayCarrierCode("aramex")).toBe("FASTWAYCOURIERS")
   })
 })

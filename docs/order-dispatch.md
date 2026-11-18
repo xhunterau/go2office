@@ -179,7 +179,7 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 |---|---|---|
 | 5 | 没有真实运单号的单（Letter；或运单号栏填的是发票号，历史上 Letter / Parcel_Post 都这样） | **只标记已发货、不带运单号**。实测 Laravel 回写 eBay 时就是这样做的（`fulfillmentId: "999"`，无运单号） |
 | 6 | `Click_and_Collect` / `Store_Delivery` 的承运商 | **按运单号前缀判断**：`MS`/`MP` → Aramex；`33XXX`/`RPP`/`TMP`/`99…` → 澳邮；认不出 → 只标记已发货 |
-| 7 | eBay 的 Aramex 承运商代码 | **用户去 Seller Hub 确认后再填**。在此之前 `EBAY_CARRIER_CODE.aramex = null`，eBay 的 Aramex 单会明确失败并提示原因，不会写一个猜的值 |
+| 7 | eBay 的 Aramex 承运商代码 | **`FASTWAYCOURIERS`**（2026-11-18 确认）。eBay 澳洲站承运商列表（Trading API `GeteBayDetails` / `ShippingCarrierDetails`，SiteID 15，共 35 项）里没有 Aramex；Fastway 是 Aramex Australia 2022 年更名前的品牌，fastway.com.au 已跳转到 aramex.com.au/tools/track。全局枚举里的 `ARAMEX` 不在澳洲站列表中，不用 |
 
 **与设计稿的差异**
 
@@ -194,9 +194,9 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 | | Shopify（`trackingInfo.company`） | eBay（`shippingCarrierCode`） |
 |---|---|---|
 | 澳邮 | `Australia Post`（官方文档；实测 Laravel 回写 Shopify 也是这个值） | `AustraliaPost`（eBay ShippingCarrierCodeType） |
-| Aramex | `Aramex Australia`（官方文档的澳洲列表里只有这个写法，单独的 `Aramex` 不在列表中） | **待确认**（决策 7） |
+| Aramex | `Aramex Australia`（官方文档的澳洲列表里只有这个写法，单独的 `Aramex` 不在列表中） | `FASTWAYCOURIERS`（决策 7；买家看到的承运商名是 FASTWAY COURIERS） |
 
-公司名在 Shopify 列表里时，Shopify 会自动生成追踪链接，所以不传 url。eBay 文档站拒绝自动抓取，`AustraliaPost` 是通过搜索引擎引用的 eBay 官方枚举页确认的。
+公司名在 Shopify 列表里时，Shopify 会自动生成追踪链接，所以不传 url。eBay 文档站拒绝自动抓取，`AustraliaPost` 起初是通过搜索引擎引用的 eBay 官方枚举页确认的；2026-11-18 用 `GeteBayDetails`（SiteID 15）直接读出澳洲站列表，两个值都以它为准。同日查了 4 张 Laravel 发过的 eBay 单（Aramex 与澳邮各两张），`shippingCarrierCode` 均为空——Laravel 从未给 eBay 回传过运单号，没有现成先例。
 
 **只读预演（2026-11-16）**
 
@@ -220,7 +220,7 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 1. `npx trigger.dev deploy` 到 staging（**部署后 sweep 定时任务立即生效**：届时若已有 pending 行，15 分钟内会被真实推送）。
 2. 挑一张 Shopify 单和一张 eBay 单，**由用户指定**，在 go2office 发货，然后到 Trigger.dev（staging）看 run、到平台后台看结果。
 3. 再点一次 Retry，确认得到 `already`、平台上没有出现第二个 fulfillment（幂等）。
-4. 用户确认 eBay Aramex 代码后：填 `EBAY_CARRIER_CODE.aramex`，删掉 `platform-carriers.test.ts` 里锁定 null 的那条用例，拿一张 eBay Aramex 单实测。
+4. eBay Aramex 代码已填为 `FASTWAYCOURIERS`（2026-11-18）。拿一张 eBay Aramex 单实测，确认 eBay 接受该值、订单页的追踪链接能打开 Aramex 的查询结果。
 
 ## 6. 交接与待测清单（2026-11-14 收工时）
 
@@ -246,4 +246,4 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 
 **注意**：Laravel 与 go2office 并行期间，同一张单只能在一个系统里发货，否则库存会扣两次。
 
-**下一阶段**：运单号回写已实现到第 5 步，剩第 6 步真实订单测试（§5.8）与 eBay Aramex 代码确认（§5.7 决策 7）。之后是发货通知邮件（§5.5：Shopify 已关闭 `notifyCustomer`，需自建）。
+**下一阶段**：运单号回写已实现到第 5 步，剩第 6 步真实订单测试（§5.8，含一张 eBay Aramex 单）。之后是发货通知邮件（§5.5：Shopify 已关闭 `notifyCustomer`，需自建）。

@@ -137,16 +137,18 @@ export const SHOPIFY_TRACKING_COMPANY: Record<Carrier, string> = {
 }
 
 /**
- * eBay's shippingCarrierCode values. "AustraliaPost" is in eBay's
- * ShippingCarrierCodeType list. Aramex is null on purpose: the only Aramex
- * value found ("ARAMEX") is listed without Australia among its sites, and the
- * eBay docs could not be read to settle it. Until the user confirms the value
- * from Seller Hub, eBay Aramex orders fail with a message saying so rather than
- * being filed under a guess.
+ * eBay's shippingCarrierCode values, taken from the eBay Australia site's own
+ * carrier list (Trading API GeteBayDetails, ShippingCarrierDetails, SiteID 15,
+ * read 2026-11-18): 35 carriers, "AustraliaPost" among them, no Aramex.
+ * Aramex Australia is Fastway Couriers renamed (2022), and fastway.com.au now
+ * redirects to aramex.com.au/tools/track, so Aramex goes as the site's
+ * "FASTWAYCOURIERS" (user decision, 2026-11-18). The global "ARAMEX" value is
+ * not on the AU list. A null here makes that carrier fail with a message
+ * instead of being sent under a guess.
  */
 export const EBAY_CARRIER_CODE: Record<Carrier, string | null> = {
   australia_post: "AustraliaPost",
-  aramex: null,
+  aramex: "FASTWAYCOURIERS",
 }
 
 export function ebayCarrierCode(carrier: Carrier): string {

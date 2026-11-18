@@ -185,7 +185,7 @@
 - **范围**：`dispatch_order()` 在发货事务内为每个平台订单插一行 `platform_fulfillment_syncs`（`pending`）；`push-platform-fulfillment`（发货后立即触发）与 `sweep-platform-fulfillment`（每 15 分钟）两个 Task 在 service role 下推送并记录结果。详见 `docs/order-dispatch.md` §5。
 - **待办行必须在发货事务里写，推送必须在事务外**：前者保证发了货就一定有待办（规则 26），后者保证平台慢或报错不会卡住发货或回滚库存。严禁把平台 API 调用挪进 `dispatch_order()` 或 `dispatchOrder` 的成功判定里。
 - **承运商映射缺值必须抛错，严禁 `?? 默认值`**：`platform-carriers.ts` 的 `METHOD_CARRIER` 是覆盖整个 `shipping_method` 枚举的 `Record`，新增枚举值不配就编译失败。挂错承运商时两个平台都照收，买家点追踪链接查不到，**不报任何错**。Shopify 公司名区分大小写，必须逐字取自其官方列表。
-- **`EBAY_CARRIER_CODE.aramex` 是刻意的 `null`**：eBay 官方枚举里找到的 `ARAMEX` 没有标注澳洲站可用，等用户在 Seller Hub 确认后再填。严禁凭记忆补一个值。
+- **`EBAY_CARRIER_CODE.aramex` 是 `FASTWAYCOURIERS`，不是 `ARAMEX`**：eBay 澳洲站的承运商列表（`GeteBayDetails` / `ShippingCarrierDetails`，SiteID 15）里没有 Aramex，只有它 2022 年更名前的 Fastway。全局枚举的 `ARAMEX` 不在澳洲站列表中。新增承运商时同样以该列表为准，查不到就留 `null`（会明确报错），严禁凭记忆补一个值。
 - **发票号不是运单号**：Letter 和部分历史订单的运单号栏填的是发票号，`resolveShipment()` 把这种情况当作「只标记已发货」。严禁把发票号作为 tracking number 发给买家。
 - **推送前先读平台现状，这是可以重试的唯一前提**：`planShopifyFulfillment` / `planEbayFulfillment` 发现已有同一运单号就返回 `already`。正因为如此，这里的 `retry` 可以放宽、Retry 按钮可以反复点；**`submit-aramex-batch` 的 `maxAttempts: 1` 不因此放宽**（规则 24）。
 - **两个 Task 共用 `platform-fulfillment` 队列（`concurrencyLimit: 1`）**：先读后写的检查只有在同一张单不被并发推送时才成立。严禁给其中一个改用别的队列。

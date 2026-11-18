@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { fulfillmentIdFromLocation, planEbayFulfillment } from "@/lib/ebay/fulfillment"
 import type { EbayLineItem } from "@/lib/ebay/orders"
 import { PlatformRefusalError } from "@/lib/fulfillment/platform-push"
-import { UnmappableShipmentError, type Shipment } from "@/lib/fulfillment/platform-carriers"
+import type { Shipment } from "@/lib/fulfillment/platform-carriers"
 
 const tracked: Shipment = { tracked: true, carrier: "australia_post", trackingNumber: "99721681914001000830906" }
 const letter: Shipment = { tracked: false }
@@ -83,9 +83,11 @@ describe("planEbayFulfillment", () => {
     expect(() => planEbayFulfillment(order(overrides), [], tracked, shippedAt)).toThrow(message)
   })
 
-  it("refuses Aramex until its eBay code is confirmed", () => {
+  it("sends Aramex under eBay AU's FASTWAYCOURIERS code", () => {
     const aramex: Shipment = { tracked: true, carrier: "aramex", trackingNumber: "MS0020719756" }
-    expect(() => planEbayFulfillment(order(), [], aramex, shippedAt)).toThrow(UnmappableShipmentError)
+    const plan = planEbayFulfillment(order(), [], aramex, shippedAt)
+    expect(plan.kind).toBe("create")
+    expect(JSON.stringify(plan)).toContain('"shippingCarrierCode":"FASTWAYCOURIERS"')
   })
 })
 
