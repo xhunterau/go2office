@@ -10,6 +10,7 @@ import { deleteProduct } from "@/lib/actions/product"
 import { useConfirm } from "@/components/providers/confirm-provider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { RemeasureFlag } from "@/components/products/remeasure-flag"
 import type { ProductDetail } from "./product-detail-types"
 
 // Sticky identity strip: it sits outside the tabs so the product it belongs to
@@ -92,6 +93,16 @@ export function ProductDetailHeader({
                 </Badge>
               )}
             </div>
+            {/* Kits are sized from their components, so there is nothing to
+                measure on the kit itself. */}
+            {!product.is_kit && (
+              <RemeasureFlag
+                productId={product.id}
+                requestedAt={product.remeasure_requested_at}
+                note={product.remeasure_note}
+                className="mt-1"
+              />
+            )}
           </div>
         </div>
 

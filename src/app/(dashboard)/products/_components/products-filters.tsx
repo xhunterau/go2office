@@ -66,7 +66,7 @@ export function ProductsFilters({
   )
 
   const hasFilters = TEXT_FIELDS.some((f) => searchParams.get(f)) ||
-    ["brandId", "supplierId", "status", "isKit", "maxMargin"].some((k) =>
+    ["brandId", "supplierId", "status", "isKit", "maxMargin", "remeasure"].some((k) =>
       searchParams.get(k)
     )
 
@@ -136,6 +136,16 @@ export function ProductsFilters({
         onChange={(v) => commit({ maxMargin: v === ALL ? null : v })}
       />
 
+      {/* Products flagged from the Postage dialog or the product page because
+          their weight or size looked wrong. The dashboard links here. */}
+      <SelectFilter
+        label="Re-measure"
+        value={searchParams.get("remeasure") ?? ALL}
+        placeholder="All"
+        options={[{ value: "1", label: "Requested" }]}
+        onChange={(v) => commit({ remeasure: v === ALL ? null : v })}
+      />
+
       {hasFilters && (
         <Button
           variant="ghost"
@@ -150,6 +160,7 @@ export function ProductsFilters({
               status: null,
               isKit: null,
               maxMargin: null,
+              remeasure: null,
             })
           }
         >

@@ -36,6 +36,8 @@ export type AlertInputs = {
   /** Open orders with item lines that resolved to no product. */
   unresolvedOrders: number
   unresolvedSample: OrderRef[]
+  /** Products flagged for re-measuring and not yet updated. */
+  remeasureProducts: number
   /** Queries that failed while building the dashboard. */
   loadErrors: string[]
 }
@@ -134,6 +136,19 @@ export function buildAlerts(input: AlertInputs): DashboardAlert[] {
       detail:
         "A line's custom label matched no product SKU, so its weight, size and cost are missing and dispatch cannot pick it.",
       orders: input.unresolvedSample,
+    })
+  }
+
+  // A to-do for the next warehouse visit, not a fault: no order waits on it.
+  if (input.remeasureProducts > 0) {
+    alerts.push({
+      id: "remeasure-products",
+      tone: "warning",
+      title: `${plural(input.remeasureProducts, "product")} waiting to be re-measured`,
+      detail:
+        "Flagged because their weight or size looked wrong. Measure them on your next warehouse visit; saving a new weight or size clears the flag.",
+      href: "/products?remeasure=1",
+      linkLabel: "View products",
     })
   }
 

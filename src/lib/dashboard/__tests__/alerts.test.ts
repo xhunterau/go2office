@@ -13,6 +13,7 @@ const healthy: AlertInputs = {
   unroutedProcessing: 0,
   unresolvedOrders: 0,
   unresolvedSample: [],
+  remeasureProducts: 0,
   loadErrors: [],
 }
 
@@ -47,6 +48,14 @@ describe("buildAlerts", () => {
     const orders = [{ id: 7, invoiceNumber: "INV-7" }]
     const [alert] = buildAlerts({ ...healthy, unresolvedOrders: 1, unresolvedSample: orders })
     expect(alert.orders).toEqual(orders)
+  })
+
+  it("lists products waiting to be re-measured, linked to the filtered list", () => {
+    const [alert] = buildAlerts({ ...healthy, remeasureProducts: 2 })
+    expect(alert.id).toBe("remeasure-products")
+    expect(alert.tone).toBe("warning")
+    expect(alert.title).toBe("2 products waiting to be re-measured")
+    expect(alert.href).toBe("/products?remeasure=1")
   })
 
   it("surfaces load failures instead of showing a false all-clear", () => {

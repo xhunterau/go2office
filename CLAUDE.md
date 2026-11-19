@@ -111,6 +111,8 @@
   - `public.rebuild_order_items` 用 `WHERE sku = upper(trim(v_label))` 匹配 `custom_label`。只归一化 label 一侧才能走 `products_sku_key` 唯一索引；一旦停用触发器导致库里出现非大写 SKU，匹配会失败并**静默生成 `product_id IS NULL` 的占位行**，不报错。
   - `public.order_metrics_summary` 的装箱估算沿**高度**累加（`max(L) × max(W) × sum(H)`），内建「H 是最短边」的假设。尺寸失序会让该商品所在的每张订单计费重虚高。
 - **`name` 的 initcap 只对新写入生效**：触发器里的 `NEW.name IS DISTINCT FROM OLD.name` 守卫**不可删**。商品表单保存时提交全部字段，删掉守卫会让「改一次价格」顺带重写商品名，把有意保留的 1,464 行历史命名（47%）在日常编辑中悄悄回填掉。原因见 `docs/order-metrics.md` §5。
+- **排序必须先读完三条边再赋值（`20261118170000` 修正）**：初版先写 `NEW.length := v_max`、再用 `NEW.length + NEW.width + NEW.height - v_max - v_min` 求中间值，读到的是已被覆盖的长度，宽度变成「宽 + 高 − 最短边」。**输入已排好序时结果恰好正确**，所以潜伏了三个月；2026-11-18 一次批量重写（`001` 重跑）把 Laravel 里长度不是最长边的 452 个商品宽度写大，订单计费重随之虚高、**不报任何错**。迁移已从 `go2_products` 修回并重算未完成订单的指标，且内置 6 种排列的自检，排序不对迁移直接失败。改这段代码时保留 `v_mid` 与自检。
+- **待复测标记（`remeasure_*`，迁移 `20261118180000`）**：Postage 弹窗或商品页上标「尺寸看起来不对、下次去仓库量」，Dashboard 告警计数并链到 `/products?remeasure=1`。**不拦任何订单**（用户决策）。`products_remeasure_clear` 在重量或长宽高**值真的变了**时清标记——按值比较而非 `UPDATE OF` 列表，因为表单保存会把四个值原样重写；它的名字排在 `products_normalize_fields` 之后，比较的是排序后的边，所以同三个数换个顺序输入不算修改。量了发现原值正确时用手动 Clear。
 - **严禁移植 xpros 的零售价美化**：xpros 同名函数的模块 2 在写入时做 `CEIL(x+0.01) - 0.05`，与本项目的 `floor(x) + 0.95` **不是同一个规则**，且本项目已有规则 17 管理的双实现。加进来会变成三实现，并在用户保存时静默改掉刚输入的价格。
 
 # 20. 运单号归一化（normalize_tracking_number）

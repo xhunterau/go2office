@@ -102,6 +102,9 @@ export type Database = {
           description: string | null
           created_at: string | null
           updated_at: string | null
+          remeasure_requested_at: string | null
+          remeasure_note: string | null
+          remeasure_requested_by: string | null
         }
         Insert: {
           id?: number
@@ -128,6 +131,9 @@ export type Database = {
           description?: string | null
           created_at?: string | null
           updated_at?: string | null
+          remeasure_requested_at?: string | null
+          remeasure_note?: string | null
+          remeasure_requested_by?: string | null
         }
         Update: {
           id?: number
@@ -154,6 +160,9 @@ export type Database = {
           description?: string | null
           created_at?: string | null
           updated_at?: string | null
+          remeasure_requested_at?: string | null
+          remeasure_note?: string | null
+          remeasure_requested_by?: string | null
         }
         Relationships: [
           {

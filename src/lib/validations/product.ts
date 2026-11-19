@@ -316,3 +316,23 @@ export const productsLogisticsUpdateSchema = z
   .array(productLogisticsSchema.extend({ id: z.coerce.number().int().positive() }))
   .min(1, "Nothing to save")
   .max(50, "Too many products")
+
+// ── re-measure flag ────────────────────────────────────────────────────────
+
+/** Mirrors the products.remeasure_note CHECK (500 characters). */
+export const REMEASURE_NOTE_MAX = 500
+
+/**
+ * Flagging a product for re-measuring. The note is optional -- "the box is
+ * clearly bigger than 120mm" helps whoever measures it, but the flag alone is
+ * enough to put it on the list.
+ */
+export const remeasureFlagSchema = z.object({
+  note: z
+    .string()
+    .trim()
+    .max(REMEASURE_NOTE_MAX, `Keep the note under ${REMEASURE_NOTE_MAX} characters`)
+    .optional()
+    .or(z.literal("")),
+})
+export type RemeasureFlagInput = z.infer<typeof remeasureFlagSchema>

@@ -111,6 +111,14 @@ async function countStalePendingSyncs(client: Client, now: number) {
   return { count: count ?? 0, error: error?.message ?? null }
 }
 
+async function countRemeasureProducts(client: Client) {
+  const { count, error } = await client
+    .from("products")
+    .select("id", { count: "exact", head: true })
+    .not("remeasure_requested_at", "is", null)
+  return { count: count ?? 0, error: error?.message ?? null }
+}
+
 async function fetchUnresolvedOpenOrders(client: Client) {
   const { data, count, error } = await client
     .from("order_metrics_summary")
@@ -176,6 +184,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     ebay,
     settings,
     unresolved,
+    remeasure,
     activity,
   ] = await Promise.all([
     fetchAllocationQueueStat(client, false),
@@ -193,6 +202,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     fetchEbayAuthorization(client, now),
     fetchShippingSettings(client),
     fetchUnresolvedOpenOrders(client),
+    countRemeasureProducts(client),
     fetchRecentActivity(client, user?.id ?? null),
   ])
 
@@ -211,6 +221,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     staleSyncs.error,
     settings.error,
     unresolved.error,
+    remeasure.error,
     activity.error,
   ].filter((message): message is string => message != null)
 
@@ -267,6 +278,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
       unroutedProcessing,
       unresolvedOrders: unresolved.total,
       unresolvedSample: unresolved.sample,
+      remeasureProducts: remeasure.count,
       loadErrors,
     }),
     activity: activity.entries,

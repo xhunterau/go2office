@@ -81,6 +81,9 @@ export type ProductFilters = {
   isKit: boolean | null
   // Upper bound on retail margin %, for finding products priced too thin.
   maxMargin: number | null
+  // Flagged for re-measuring (products.remeasure_requested_at), the list the
+  // dashboard's health panel links to.
+  remeasure: boolean
   page: number
 }
 
@@ -117,6 +120,7 @@ export function parseProductFilters(
     status,
     isKit,
     maxMargin,
+    remeasure: text("remeasure") === "1",
     page: pageRaw ?? 1,
   }
 }
@@ -152,6 +156,22 @@ export async function fetchProductList(
   // be below the threshold.
   if (filters.maxMargin !== null)
     query = query.lt("retail_margin_pct", filters.maxMargin)
+
+  // product_list_pricing does not carry the flag, so resolve it to ids first.
+  // The flagged set is a handful of products at any time (partial index
+  // products_remeasure_requested_idx), so the IN list stays short.
+  if (filters.remeasure) {
+    const { data: flagged, error: flaggedError } = await supabase
+      .from("products")
+      .select("id")
+      .not("remeasure_requested_at", "is", null)
+    if (flaggedError) return { rows: [], count: 0, error: flaggedError.message }
+    if (!flagged || flagged.length === 0) return { rows: [], count: 0, error: null }
+    query = query.in(
+      "id",
+      flagged.map((row) => row.id)
+    )
+  }
 
   const from = (filters.page - 1) * PRODUCTS_PAGE_SIZE
   const to = from + PRODUCTS_PAGE_SIZE - 1

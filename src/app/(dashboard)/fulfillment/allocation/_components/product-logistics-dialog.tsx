@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { RemeasureFlag } from "@/components/products/remeasure-flag"
 import {
   loadProductsLogistics,
   updateProductsLogistics,
@@ -212,6 +213,15 @@ export function ProductLogisticsDialog({
                           />
                         ))}
                       </div>
+                      {/* For when the size looks wrong but cannot be measured
+                          from here. Saving a real change clears it. */}
+                      {product ? (
+                        <RemeasureFlag
+                          productId={product.id}
+                          requestedAt={product.remeasure_requested_at}
+                          note={product.remeasure_note}
+                        />
+                      ) : null}
                     </div>
                   )
                 })

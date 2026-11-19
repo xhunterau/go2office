@@ -22,6 +22,7 @@
 - **processing 无通道**：processing 总数 − 四个通道之和。典型来源是 `shipping_method` 为空、只有 `legacy_shipping_method` 的同步订单，它们**永远不会出现在 Export Labels 上**。
 - **非 AU pending**：pending 总数 − Address − Postage。
 - **未解析明细**：pending / processing / labelled 订单里 `unresolved_item_count > 0`。
+- **待复测商品**（黄，2026-11-18）：`products.remeasure_requested_at` 非空的数量，链到 `/products?remeasure=1`。在 Postage 弹窗的 Edit weight & size 或商品详情页用 `Flag for re-measure` 标记；重量或长宽高实际改动时由触发器 `products_remeasure_clear` 自动清除，不拦任何订单。见 CLAUDE.md 规则 19。
 - 任一查询失败会出红色告警，**不会显示成全绿**。
 
 ## 3. 销售口径

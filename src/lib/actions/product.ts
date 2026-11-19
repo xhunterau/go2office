@@ -19,9 +19,11 @@ import {
   productSectionSchemas,
   retailPriceSchema,
   productsLogisticsUpdateSchema,
+  remeasureFlagSchema,
   DEFAULT_DIMENSION,
   type ProductCreateInput,
   type ProductSection,
+  type RemeasureFlagInput,
 } from "@/lib/validations/product"
 import { ALLOCATION_STATUS } from "@/lib/queries/allocation"
 import {
@@ -332,6 +334,8 @@ export type ProductLogistics = {
   length: number
   width: number
   height: number
+  remeasure_requested_at: string | null
+  remeasure_note: string | null
 }
 
 // Current weight and dimensions for the Postage dialog's edit form. Read when
@@ -347,7 +351,9 @@ export async function loadProductsLogistics(
   const supabase = await createClient()
   const { data, error } = await supabase
     .from("products")
-    .select("id, sku, name, is_kit, weight, length, width, height")
+    .select(
+      "id, sku, name, is_kit, weight, length, width, height, remeasure_requested_at, remeasure_note"
+    )
     .in("id", unique)
     .order("sku", { ascending: true })
 
@@ -465,4 +471,101 @@ export async function updateProductsLogistics(
     }
   }
   return { success: true, data: { rebuiltOrders } }
+}
+
+function revalidateRemeasure(productId: number): void {
+  revalidatePath(PATH)
+  revalidatePath(`${PATH}/${productId}`)
+  revalidatePath("/fulfillment/allocation", "layout")
+  // The dashboard's health panel counts flagged products.
+  revalidatePath("/")
+}
+
+/**
+ * Flags a product for re-measuring on the next warehouse visit.
+ *
+ * Clearing is normally automatic: the products_remeasure_clear trigger drops
+ * the flag when weight, length, width or height actually change. Re-flagging an
+ * already flagged product refreshes the note and the date.
+ *
+ * Kits are refused: their weight and size come from their components, so the
+ * thing to measure is a component.
+ */
+export async function flagProductForRemeasure(
+  productId: number,
+  input: RemeasureFlagInput
+): Promise<ActionResult> {
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return { success: false, error: "Invalid product" }
+  }
+  const parsed = remeasureFlagSchema.safeParse(input)
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" }
+  }
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Your session has expired" }
+
+  // Read back: RLS refuses an UPDATE by returning no rows (rule 22). The
+  // is_kit filter makes a kit come back empty too, and is told apart below.
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      remeasure_requested_at: new Date().toISOString(),
+      remeasure_note: toNullable(parsed.data.note),
+      remeasure_requested_by: user.id,
+    })
+    .eq("id", productId)
+    .eq("is_kit", false)
+    .select("id")
+    .maybeSingle()
+
+  if (error) return { success: false, error: error.message }
+  if (!data) {
+    const { data: kit } = await supabase
+      .from("products")
+      .select("is_kit")
+      .eq("id", productId)
+      .maybeSingle()
+    return {
+      success: false,
+      error: kit?.is_kit
+        ? "This is a kit. Its weight and size come from its components, so flag the component instead."
+        : "Product not found",
+    }
+  }
+
+  revalidateRemeasure(productId)
+  return { success: true }
+}
+
+/**
+ * Clears the flag by hand, for when the product was measured and its recorded
+ * size turned out to be right -- nothing changed, so the trigger never fired.
+ */
+export async function clearProductRemeasure(productId: number): Promise<ActionResult> {
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return { success: false, error: "Invalid product" }
+  }
+
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      remeasure_requested_at: null,
+      remeasure_note: null,
+      remeasure_requested_by: null,
+    })
+    .eq("id", productId)
+    .select("id")
+    .maybeSingle()
+
+  if (error) return { success: false, error: error.message }
+  if (!data) return { success: false, error: "Product not found" }
+
+  revalidateRemeasure(productId)
+  return { success: true }
 }
