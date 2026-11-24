@@ -15,6 +15,7 @@ import {
   fetchKitComponentCosts,
   fetchProductPricing,
 } from "@/lib/queries/product-pricing"
+import { LIST_RETURN_PARAM, listHref } from "@/lib/navigation/list-return"
 import { ProductDetailHeader } from "./_components/product-detail-header"
 import { ProductDetailTabs } from "./_components/product-detail-tabs"
 import {
@@ -29,10 +30,13 @@ import { ProductUsedInPanel } from "./_components/product-used-in-panel"
 
 export default async function ProductDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { id: idParam } = await params
+  const backHref = listHref("/products", (await searchParams)[LIST_RETURN_PARAM])
   const id = Number(idParam)
   if (!Number.isInteger(id) || id <= 0) notFound()
 
@@ -96,6 +100,7 @@ export default async function ProductDetailPage({
       <ProductDetailHeader
         product={product}
         usedInKitCount={usedIn.parents.length}
+        backHref={backHref}
       />
 
       <ProductDetailTabs

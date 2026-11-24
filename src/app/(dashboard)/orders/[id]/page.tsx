@@ -8,6 +8,7 @@ import {
 import { fetchPlatformSyncs } from "@/lib/queries/platform-fulfillment"
 import { fetchLatestShippingQuotes } from "@/lib/queries/shipping-quotes"
 import { platformOrderNumbers } from "@/lib/orders/platform-order-number"
+import { LIST_RETURN_PARAM, listHref } from "@/lib/navigation/list-return"
 import { OrderDetailHeader } from "./_components/order-detail-header"
 import { OrderSummaryCards } from "./_components/order-summary-cards"
 import { OrderTransactionsTable } from "./_components/order-transactions-table"
@@ -16,10 +17,13 @@ import { ShippingQuotesPanel } from "./_components/shipping-quotes-panel"
 
 export default async function OrderDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { id } = await params
+  const backHref = listHref("/orders", (await searchParams)[LIST_RETURN_PARAM])
   const orderId = Number(id)
   if (!Number.isInteger(orderId) || orderId <= 0) notFound()
 
@@ -48,7 +52,7 @@ export default async function OrderDetailPage({
 
   return (
     <div className="flex flex-1 flex-col gap-6">
-      <OrderDetailHeader order={detail.order} />
+      <OrderDetailHeader order={detail.order} backHref={backHref} />
 
       <OrderSummaryCards
         order={detail.order}

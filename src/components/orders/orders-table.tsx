@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { ChevronDown, ChevronRight, Copy, MoreHorizontal, Pencil } from "lucide-react"
 
 import type { OrderListRow, OrderTransaction } from "@/lib/queries/orders"
@@ -13,8 +14,9 @@ import {
   ORDER_STATUS_VARIANTS,
   SALES_PLATFORM_LABELS,
 } from "@/lib/orders/status"
+import { detailHref } from "@/lib/navigation/list-return"
 import { cn } from "@/lib/utils"
-import { copyToClipboard } from "@/components/copy-button"
+import { CopyButton, copyToClipboard } from "@/components/copy-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -44,6 +46,7 @@ export function OrdersTable({
   showCustomer = true,
   emptyMessage = "No orders found.",
   selectable = false,
+  linkBackToList = false,
 }: {
   rows: OrderListRow[]
   showCustomer?: boolean
@@ -55,7 +58,17 @@ export function OrdersTable({
    * the page or the filters change, which is what clears it.
    */
   selectable?: boolean
+  /**
+   * Carry the current URL's query into the order links so the detail page's
+   * back link returns to the same filters (lib/navigation/list-return.ts). On
+   * for /orders only: the customer page's query is not an order list's.
+   */
+  linkBackToList?: boolean
 }) {
+  const searchParams = useSearchParams()
+  const orderHref = (id: number) =>
+    detailHref(`/orders/${id}`, linkBackToList ? searchParams.toString() : "")
+
   // One row open at a time, as on /inventory: two expanded line lists push the
   // rest of the page off screen without helping anyone compare them.
   const [expandedId, setExpandedId] = React.useState<number | null>(null)
@@ -86,8 +99,8 @@ export function OrdersTable({
   }
 
   // [select] + chevron + Invoice + Date + [Customer] + Platform + Status + Items + Weight
-  // + Total + Shipping + Dispatched + actions.
-  const columnCount = (showCustomer ? 12 : 11) + (selectable ? 1 : 0)
+  // + Total + Shipping + Tracking + Dispatched + actions.
+  const columnCount = (showCustomer ? 13 : 12) + (selectable ? 1 : 0)
 
   const loadLines = React.useCallback(async (orderId: number) => {
     setLoadingId(orderId)
@@ -153,6 +166,7 @@ export function OrdersTable({
               <TableHead className="text-right">Weight</TableHead>
               <TableHead className="text-right">Total</TableHead>
               <TableHead>Shipping</TableHead>
+              <TableHead>Tracking</TableHead>
               <TableHead>Dispatched</TableHead>
               <TableHead className="w-12 text-right">Actions</TableHead>
             </TableRow>
@@ -212,9 +226,12 @@ export function OrdersTable({
                         </Button>
                       </TableCell>
                       <TableCell className="font-medium">
-                        <Link href={`/orders/${row.id}`} className="hover:underline">
-                          {row.invoice_number}
-                        </Link>
+                        <div className="flex items-center gap-1">
+                          <Link href={orderHref(row.id)} className="hover:underline">
+                            {row.invoice_number}
+                          </Link>
+                          <CopyButton value={row.invoice_number} label="invoice number" />
+                        </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {formatDate(row.created_at)}
@@ -281,6 +298,21 @@ export function OrdersTable({
                           <span className="ml-1 text-xs">(retired)</span>
                         )}
                       </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {row.tracking_number ? (
+                          <div className="flex items-center gap-1">
+                            <span className="font-mono text-xs">
+                              {row.tracking_number}
+                            </span>
+                            <CopyButton
+                              value={row.tracking_number}
+                              label="tracking number"
+                            />
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="whitespace-nowrap text-muted-foreground">
                         {formatDate(row.posted_on_date)}
                       </TableCell>
@@ -301,7 +333,7 @@ export function OrdersTable({
                             the menu to 128px and wraps the labels. */}
                           <DropdownMenuContent align="end" className="w-56">
                             <DropdownMenuItem asChild>
-                              <Link href={`/orders/${row.id}`}>
+                              <Link href={orderHref(row.id)}>
                                 <Pencil />
                                 View and edit
                               </Link>

@@ -18,9 +18,12 @@ import type { ProductDetail } from "./product-detail-types"
 export function ProductDetailHeader({
   product,
   usedInKitCount,
+  backHref,
 }: {
   product: ProductDetail
   usedInKitCount: number
+  /** The product list with the filters it was opened from. */
+  backHref: string
 }) {
   const router = useRouter()
   const confirm = useConfirm()
@@ -40,7 +43,7 @@ export function ProductDetailHeader({
       const result = await deleteProduct(product.id)
       if (result.success) {
         toast.success("Product deleted")
-        router.push("/products")
+        router.push(backHref)
       } else {
         toast.error(result.error ?? "Something went wrong")
       }
@@ -55,7 +58,7 @@ export function ProductDetailHeader({
         size="sm"
         className="-ml-2 w-fit text-muted-foreground"
       >
-        <Link href="/products">
+        <Link href={backHref}>
           <ArrowLeft />
           Products
         </Link>

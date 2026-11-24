@@ -2,10 +2,12 @@
 
 import * as React from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { ImageOff, Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { cn } from "@/lib/utils"
+import { detailHref } from "@/lib/navigation/list-return"
 import type { ProductListRow } from "@/lib/queries/products"
 import { LOW_MARGIN_THRESHOLD } from "@/lib/queries/products"
 import { deleteProduct } from "@/lib/actions/product"
@@ -34,6 +36,11 @@ const priceFormatter = new Intl.NumberFormat("en-AU", {
 export function ProductsTable({ products }: { products: ProductListRow[] }) {
   const confirm = useConfirm()
   const [isPending, startTransition] = React.useTransition()
+  // The filters ride along so the detail page's back link restores them
+  // (lib/navigation/list-return.ts).
+  const searchParams = useSearchParams()
+  const productHref = (id: number) =>
+    detailHref(`/products/${id}`, searchParams.toString())
 
   async function handleDelete(product: ProductListRow) {
     const ok = await confirm({
@@ -101,7 +108,7 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
                 </TableCell>
                 <TableCell className="font-medium">
                   <Link
-                    href={`/products/${product.id}`}
+                    href={productHref(product.id)}
                     className="hover:underline"
                   >
                     {product.sku}
@@ -174,7 +181,7 @@ export function ProductsTable({ products }: { products: ProductListRow[] }) {
                           aria-label="Edit"
                         >
                           <Link
-                            href={`/products/${product.id}`}
+                            href={productHref(product.id)}
                             target="_blank"
                             rel="noopener noreferrer"
                           >

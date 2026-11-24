@@ -69,6 +69,7 @@ export default async function OrdersPage({
             // bulk selection: it is scoped to the rows on screen.
             key={JSON.stringify(filters)}
             selectable
+            linkBackToList
             rows={list.rows}
             emptyMessage={
               // "No such SKU" and "this SKU has never sold" are different

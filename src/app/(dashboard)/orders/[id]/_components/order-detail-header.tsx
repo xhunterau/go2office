@@ -33,7 +33,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { OrderEditDialog } from "./order-edit-dialog"
 
-export function OrderDetailHeader({ order }: { order: OrderDetail }) {
+export function OrderDetailHeader({
+  order,
+  backHref,
+}: {
+  order: OrderDetail
+  /** The order list with the filters it was opened from. */
+  backHref: string
+}) {
   const confirm = useConfirm()
   const [editOpen, setEditOpen] = React.useState(false)
   const [isPending, startTransition] = React.useTransition()
@@ -79,7 +86,7 @@ export function OrderDetailHeader({ order }: { order: OrderDetail }) {
   return (
     <div className="flex flex-col gap-3">
       <Link
-        href="/orders"
+        href={backHref}
         className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="size-4" />
