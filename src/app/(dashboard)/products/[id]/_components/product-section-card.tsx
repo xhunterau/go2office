@@ -3,9 +3,9 @@
 import * as React from "react"
 import { Pencil } from "lucide-react"
 
-import type {
-  ProductFieldKey,
-  ProductSection,
+import {
+  editableSectionFields,
+  type ProductSection,
 } from "@/lib/validations/product"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -39,7 +39,7 @@ export function ProductSectionCard({
   rows,
   initialValues,
   lookups,
-  hiddenFields,
+  isKit,
   className,
 }: {
   section: ProductSection
@@ -47,10 +47,13 @@ export function ProductSectionCard({
   rows: SectionRow[]
   initialValues: SectionFormValues
   lookups: SectionLookups
-  hiddenFields?: ReadonlySet<ProductFieldKey>
+  isKit: boolean
   className?: string
 }) {
   const [open, setOpen] = React.useState(false)
+  // A kit derives every Commercial value from its components (the retail price
+  // is on the Pricing tab), so there is nothing to edit here.
+  const editable = editableSectionFields(section, isKit).length > 0
 
   return (
     <Card className={className}>
@@ -58,12 +61,14 @@ export function ProductSectionCard({
         <CardTitle className="text-base">
           {PRODUCT_SECTION_TITLES[section]}
         </CardTitle>
-        <CardAction>
-          <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
-            <Pencil />
-            Edit
-          </Button>
-        </CardAction>
+        {editable && (
+          <CardAction>
+            <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+              <Pencil />
+              Edit
+            </Button>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-2 gap-4">
@@ -83,15 +88,17 @@ export function ProductSectionCard({
         </dl>
       </CardContent>
 
-      <ProductSectionDialog
-        open={open}
-        onOpenChange={setOpen}
-        productId={productId}
-        section={section}
-        initialValues={initialValues}
-        lookups={lookups}
-        hiddenFields={hiddenFields}
-      />
+      {editable && (
+        <ProductSectionDialog
+          open={open}
+          onOpenChange={setOpen}
+          productId={productId}
+          section={section}
+          initialValues={initialValues}
+          lookups={lookups}
+          isKit={isKit}
+        />
+      )}
     </Card>
   )
 }

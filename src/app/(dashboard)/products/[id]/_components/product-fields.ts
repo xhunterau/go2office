@@ -1,7 +1,7 @@
 import type { Database } from "@/lib/supabase/database.types"
 import {
   BOOLEAN_FIELDS,
-  PRODUCT_SECTION_FIELDS,
+  editableSectionFields,
   type ProductFieldKey,
   type ProductSection,
 } from "@/lib/validations/product"
@@ -88,39 +88,6 @@ export const PRODUCT_FIELD_META: Record<
   is_kit: { label: "Kit", control: { kind: "switch" } },
 }
 
-// Columns a kit does not own: they are rolled up from its components by
-// public.product_pricing, and the values stored on the kit row itself are legacy
-// placeholders nothing reads. Hidden from the edit dialog so nobody fills in a
-// number that will never be used; the overview shows the derived value instead.
-//
-// `retail_price` is absent because it is not derived — see PRICING_OWNED_FIELDS
-// for why it is nonetheless kept out of this dialog.
-export const KIT_DERIVED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
-  "origin_id",
-  "currency",
-  "purchase_price",
-  "is_gst",
-  "weight",
-  "length",
-  "width",
-  "height",
-])
-
-// Columns the Pricing tab owns the edit affordance for, on every product —
-// stored, not derived, but only decidable next to the landed cost and the
-// suggested price. Hidden from the Commercial dialog so there is exactly one
-// place to change them; the overview still shows the value.
-export const PRICING_OWNED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
-  "retail_price",
-])
-
-// The fields the Commercial dialog must not offer for this product. Kits also
-// hide everything they derive from their components.
-export function hiddenSectionFields(isKit: boolean): ReadonlySet<ProductFieldKey> {
-  if (!isKit) return PRICING_OWNED_FIELDS
-  return new Set([...KIT_DERIVED_FIELDS, ...PRICING_OWNED_FIELDS])
-}
-
 // Title shown on each overview card / edit dialog.
 export const PRODUCT_SECTION_TITLES: Record<ProductSection, string> = {
   details: "Product Details",
@@ -128,16 +95,18 @@ export const PRODUCT_SECTION_TITLES: Record<ProductSection, string> = {
 }
 
 // A section's form values, keyed by field. Booleans map to Switch, everything
-// else to a string input/select — matching `productSectionFormSchemas`.
+// else to a string input/select — matching `productSectionFormSchema`.
 export type SectionFormValues = Record<string, string | boolean>
 
 // Project a product row onto the string/boolean shape the edit form binds to.
+// Only the fields the section edits for this product: a hidden field must not
+// reach the form, or its value is validated where no error can be shown.
 export function toSectionFormValues(
   product: ProductRow,
   section: ProductSection
 ): SectionFormValues {
   const values: SectionFormValues = {}
-  for (const key of PRODUCT_SECTION_FIELDS[section]) {
+  for (const key of editableSectionFields(section, product.is_kit)) {
     const raw = product[key]
     values[key] = BOOLEAN_FIELDS.has(key)
       ? Boolean(raw)

@@ -228,21 +228,70 @@ const commercialFormFields = {
   height: requiredPositiveField("Height"),
 }
 
-export const productSectionSchemas = {
-  details: pickSchema(serverFields, PRODUCT_SECTION_FIELDS.details),
-  commercial: pickSchema(
-    commercialServerFields,
-    PRODUCT_SECTION_FIELDS.commercial
-  ),
-} satisfies Record<ProductSection, z.ZodTypeAny>
+// Columns a kit does not own: they are rolled up from its components by
+// public.product_pricing, and the values stored on the kit row itself are legacy
+// placeholders nothing reads (most are 0 or null).
+//
+// `retail_price` is absent because it is not derived — see PRICING_OWNED_FIELDS
+// for why it is nonetheless kept out of the section edit.
+export const KIT_DERIVED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
+  "origin_id",
+  "currency",
+  "purchase_price",
+  "is_gst",
+  "weight",
+  "length",
+  "width",
+  "height",
+])
 
-export const productSectionFormSchemas = {
-  details: pickSchema(formFields, PRODUCT_SECTION_FIELDS.details),
-  commercial: pickSchema(
-    commercialFormFields,
-    PRODUCT_SECTION_FIELDS.commercial
-  ),
-} satisfies Record<ProductSection, z.ZodTypeAny>
+// Columns the Pricing tab owns the edit affordance for, on every product —
+// stored, not derived, but only decidable next to the landed cost and the
+// suggested price. Kept out of the Commercial section so there is exactly one
+// place to change them.
+export const PRICING_OWNED_FIELDS: ReadonlySet<ProductFieldKey> = new Set([
+  "retail_price",
+])
+
+/** The fields the section edit must not offer for this product. */
+export function hiddenSectionFields(isKit: boolean): ReadonlySet<ProductFieldKey> {
+  if (!isKit) return PRICING_OWNED_FIELDS
+  return new Set([...KIT_DERIVED_FIELDS, ...PRICING_OWNED_FIELDS])
+}
+
+/**
+ * The fields a section edit shows, validates and writes for this product.
+ *
+ * Hidden fields are left out of all three, not just the rendering. They used
+ * to ride along as default values and be validated anyway, so a product whose
+ * hidden retail price was 0 (1,510 of them) or a kit with 0 placeholders (611)
+ * could not be saved -- the error belonged to a field nobody could see, and
+ * Save simply did nothing (2026-11-25).
+ */
+export function editableSectionFields(
+  section: ProductSection,
+  isKit: boolean
+): ProductFieldKey[] {
+  const hidden = hiddenSectionFields(isKit)
+  const fields: readonly ProductFieldKey[] = PRODUCT_SECTION_FIELDS[section]
+  return fields.filter((key) => !hidden.has(key))
+}
+
+/** Server-side schema for one section edit; unknown keys are stripped. */
+export function productSectionSchema(section: ProductSection, isKit: boolean) {
+  return pickSchema(
+    section === "commercial" ? commercialServerFields : serverFields,
+    editableSectionFields(section, isKit)
+  )
+}
+
+/** The dialog's string-based counterpart of productSectionSchema. */
+export function productSectionFormSchema(section: ProductSection, isKit: boolean) {
+  return pickSchema(
+    section === "commercial" ? commercialFormFields : formFields,
+    editableSectionFields(section, isKit)
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Retail price — edited on its own, from the Pricing tab
@@ -256,11 +305,6 @@ export const retailPriceSchema = pickSchema(serverFields, ["retail_price"])
 
 export const retailPriceFormSchema = pickSchema(formFields, ["retail_price"])
 export type RetailPriceFormValues = z.infer<typeof retailPriceFormSchema>
-
-// The string-based value shape of one section's edit form.
-export type ProductSectionFormValues<S extends ProductSection> = z.infer<
-  (typeof productSectionFormSchemas)[S]
->
 
 // Which of a section's fields are booleans (Switch) vs strings (Input/Select).
 export const BOOLEAN_FIELDS = new Set<ProductFieldKey>([

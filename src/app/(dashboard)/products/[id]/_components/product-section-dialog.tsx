@@ -2,15 +2,17 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { useForm, type Resolver } from "react-hook-form"
+import { useForm, type FieldErrors, type Resolver } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { toast } from "sonner"
 
 import { updateProductSection } from "@/lib/actions/product"
 import {
   CURRENCIES,
+  editableSectionFields,
+  hiddenSectionFields,
   PRODUCT_SECTION_FIELDS,
-  productSectionFormSchemas,
+  productSectionFormSchema,
   type ProductFieldKey,
   type ProductSection,
 } from "@/lib/validations/product"
@@ -84,7 +86,7 @@ export function ProductSectionDialog({
   section,
   initialValues,
   lookups,
-  hiddenFields,
+  isKit,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -92,19 +94,21 @@ export function ProductSectionDialog({
   section: ProductSection
   initialValues: SectionFormValues
   lookups: SectionLookups
-  // Fields this product derives rather than stores (a kit's cost inputs). They
-  // are not rendered, but react-hook-form still submits their default values, so
-  // the section schema keeps validating and the columns round-trip untouched.
-  hiddenFields?: ReadonlySet<ProductFieldKey>
+  // Decides which fields the section edits (editableSectionFields): a kit's
+  // derived cost inputs and the Pricing-owned retail price are not rendered,
+  // validated or submitted, so their stored values are never touched.
+  isKit: boolean
 }) {
   const router = useRouter()
   const [isPending, startTransition] = React.useTransition()
 
+  const fields = editableSectionFields(section, isKit)
+
   const form = useForm<SectionFormValues>({
-    // The schema is picked at runtime from a union of per-section shapes, so
-    // its resolver cannot be statically tied to the generic value record.
+    // The schema is built at runtime from the section and the product's fields,
+    // so its resolver cannot be statically tied to the generic value record.
     resolver: zodResolver(
-      productSectionFormSchemas[section]
+      productSectionFormSchema(section, isKit)
     ) as unknown as Resolver<SectionFormValues>,
     defaultValues: initialValues,
   })
@@ -126,18 +130,30 @@ export function ProductSectionDialog({
     })
   }
 
+  // A safety net, not a path that should run: every validated field is
+  // rendered with its own message. If one ever is not, say so instead of
+  // leaving Save looking dead.
+  function onInvalid(errors: FieldErrors<SectionFormValues>) {
+    const unseen = Object.keys(errors).filter(
+      (key) => !fields.includes(key as ProductFieldKey)
+    )
+    if (unseen.length === 0) return
+    const key = unseen[0] as ProductFieldKey
+    const label = PRODUCT_FIELD_META[key]?.label ?? key
+    toast.error(`Cannot save: ${label}`, {
+      description: String(errors[key]?.message ?? "Invalid value"),
+    })
+  }
+
   const allFields = PRODUCT_SECTION_FIELDS[section] as readonly ProductFieldKey[]
-  const fields = hiddenFields
-    ? allFields.filter((key) => !hiddenFields.has(key))
-    : allFields
+  const hiddenFields = hiddenSectionFields(isKit)
 
   // Two different reasons a field can be missing, and they need different
   // explanations: a kit's cost inputs are derived and cannot be set anywhere,
   // while the retail price is simply set elsewhere. The kit case subsumes the
   // other, so it is worded to cover both.
   const hidesRetailPrice =
-    allFields.includes("retail_price") &&
-    (hiddenFields?.has("retail_price") ?? false)
+    allFields.includes("retail_price") && hiddenFields.has("retail_price")
   const hidesDerived = fields.length < allFields.length - (hidesRetailPrice ? 1 : 0)
 
   return (
@@ -163,7 +179,10 @@ export function ProductSectionDialog({
         </DialogHeader>
 
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <form
+            onSubmit={form.handleSubmit(onSubmit, onInvalid)}
+            className="space-y-4"
+          >
             <div className="grid gap-4 sm:grid-cols-2">
               {fields.map((key) => {
                 const meta = PRODUCT_FIELD_META[key]

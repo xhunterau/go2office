@@ -16,7 +16,8 @@ import {
 } from "@/lib/actions/action-result"
 import {
   productCreateSchema,
-  productSectionSchemas,
+  productSectionSchema,
+  PRODUCT_SECTION_FIELDS,
   retailPriceSchema,
   productsLogisticsUpdateSchema,
   remeasureFlagSchema,
@@ -186,10 +187,24 @@ export async function updateProductSection(
     return { success: false, error: "Invalid product id" }
   }
 
-  const schema = productSectionSchemas[section]
-  if (!schema) return { success: false, error: "Unknown section" }
+  if (!Object.hasOwn(PRODUCT_SECTION_FIELDS, section)) {
+    return { success: false, error: "Unknown section" }
+  }
 
-  const parsed = schema.safeParse(input)
+  const supabase = await createClient()
+
+  // Read first: is_kit decides which fields this section may write (hidden
+  // ones are stripped by the schema, never validated), and the current image
+  // is cleaned up after a replacement.
+  const { data: current, error: readError } = await supabase
+    .from("products")
+    .select("is_kit, image_url")
+    .eq("id", id)
+    .maybeSingle()
+  if (readError) return { success: false, error: readError.message }
+  if (!current) return { success: false, error: "Product not found" }
+
+  const parsed = productSectionSchema(section, current.is_kit).safeParse(input)
   if (!parsed.success) {
     return {
       success: false,
@@ -198,19 +213,9 @@ export async function updateProductSection(
   }
 
   const payload = toUpdatePayload(parsed.data)
-  const supabase = await createClient()
-
-  // Read the current image before overwriting it so the old object can be
-  // cleaned up afterwards.
-  let previousImageUrl: string | null = null
-  if (section === "details") {
-    const { data: current } = await supabase
-      .from("products")
-      .select("image_url")
-      .eq("id", id)
-      .maybeSingle()
-    previousImageUrl = current?.image_url ?? null
-  }
+  // A kit's Commercial section has nothing of its own to write.
+  if (Object.keys(payload).length === 0) return { success: true }
+  const previousImageUrl = current.image_url
 
   // updated_at is maintained by the moddatetime trigger (migration
   // 20260719150000), so it is never set here.
