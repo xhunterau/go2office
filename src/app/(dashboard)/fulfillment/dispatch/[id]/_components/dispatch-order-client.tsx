@@ -11,7 +11,6 @@ import {
   Loader2,
   MessageSquareWarning,
   PackageCheck,
-  RotateCcw,
   ScanLine,
   TriangleAlert,
 } from "lucide-react"
@@ -22,7 +21,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Form, FormControl, FormField, FormItem, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { useBarcodeScanner } from "@/hooks/use-barcode-scanner"
 import { dispatchOrder } from "@/lib/actions/dispatch"
 import { usableAddressLines } from "@/lib/fulfillment/csv"
 import {
@@ -54,10 +52,11 @@ const INVOICE_PATTERN = /^[0-9A-F]{8}$/i
  * label, dispatch. xpros' item-by-item barcode check is left out on purpose
  * (user decision, 2026-11-14).
  *
- * The tracking number arrives through a document-level scanner listener, not a
- * focused input: on a tablet a focused input raises the on-screen keyboard over
- * half the page, and a tap anywhere else would silently lose the scan. The
- * input stays for typing a number by hand.
+ * The tracking input is focused on load, like the search page's: the scanner
+ * types into it and its trailing Enter submits the form (user decision,
+ * 2026-11-25 -- the document-level listener it replaces missed scans whose keys
+ * arrived more than 50ms apart). Every check a scan needs runs on submit, so a
+ * scan, a typed number and the Dispatch button all take the same path.
  *
  * Afterwards the page returns to the search, not to the next order in the
  * queue: the operator opens the order for the parcel actually in front of them.
@@ -99,25 +98,21 @@ export function DispatchOrderClient({
 
   const note = order.comments?.trim() || null
 
-  // An existing number (Aramex writes one when it books) is shown locked; the
-  // operator unlocks it only to replace it.
+  // An existing number (Aramex writes one when it books) is prefilled and
+  // selected, so scanning the label overwrites it and pressing Enter keeps it.
   const existingTracking = order.tracking_number?.trim() || null
-  const [editingTracking, setEditingTracking] = React.useState(existingTracking === null)
   const [busy, setBusy] = React.useState(false)
-  const trackingRef = React.useRef<HTMLInputElement | null>(null)
 
   const form = useForm<TrackingFormValues>({
     resolver: zodResolver(trackingFormSchema),
     defaultValues: { tracking_number: existingTracking ?? "" },
   })
 
-  function startReentry() {
-    setEditingTracking(true)
-    // After the input has become editable, so the selection sticks.
-    requestAnimationFrame(() => {
-      trackingRef.current?.focus()
-      trackingRef.current?.select()
-    })
+  /** Back to the input with its text selected, ready for the next scan. */
+  function rearm(value?: string) {
+    if (value !== undefined) form.setValue("tracking_number", value)
+    // After the toast or the confirm box has given focus back.
+    requestAnimationFrame(() => form.setFocus("tracking_number", { shouldSelect: true }))
   }
 
   const unresolved = items.filter((item) => item.product_id === null).length
@@ -133,15 +128,14 @@ export function DispatchOrderClient({
   const customer = order.customers
   const shipping = displayShippingMethod(order)
 
-  function submit(values: TrackingFormValues) {
-    if (blockers.length > 0 || dispatchPicks === null) return
-    void run(values.tracking_number, dispatchPicks)
-  }
-
-  async function handleScan(value: string) {
+  async function submit(values: TrackingFormValues) {
     if (isPending || busy) return
+    const value = values.tracking_number
+    const keepsExisting = existingTracking !== null && value === existingTracking
 
-    if (INVOICE_PATTERN.test(value)) {
+    // Some historical orders carry their invoice number as the tracking number
+    // (rule 27), so only a newly entered value is checked against the pattern.
+    if (!keepsExisting && INVOICE_PATTERN.test(value)) {
       if (value.toUpperCase() === order.invoice_number.toUpperCase()) {
         toast.message("This order is already open", { description: "Now scan the tracking number on the label." })
       } else {
@@ -149,34 +143,32 @@ export function DispatchOrderClient({
           action: { label: "Open it", onClick: () => router.push(`/fulfillment/dispatch?q=${encodeURIComponent(value)}`) },
         })
       }
+      rearm(existingTracking ?? "")
       return
     }
 
     // A label that was booked through Aramex already carries its number. The
     // scan is a raw barcode that may wrap the stored article id, so "contains"
     // is the same parcel; anything else is a different label.
-    if (!editingTracking && existingTracking) {
-      const sameParcel = value.toUpperCase().includes(existingTracking.toUpperCase())
-      if (!sameParcel) {
-        setBusy(true)
-        const replace = await confirm({
-          title: "Replace the tracking number?",
-          description: `This order already has ${existingTracking}. The scanned label reads ${value}.`,
-          confirmText: "Use the scanned number",
-        })
-        setBusy(false)
-        if (!replace) return
-        setEditingTracking(true)
+    if (existingTracking && !value.toUpperCase().includes(existingTracking.toUpperCase())) {
+      setBusy(true)
+      const replace = await confirm({
+        title: "Replace the tracking number?",
+        description: `This order already has ${existingTracking}. The scanned label reads ${value}.`,
+        confirmText: "Use the scanned number",
+      })
+      setBusy(false)
+      if (!replace) {
+        rearm(existingTracking)
+        return
       }
     }
 
-    form.setValue("tracking_number", value, { shouldDirty: true, shouldValidate: true })
-
-    if (blockers.length > 0) {
+    if (blockers.length > 0 || dispatchPicks === null) {
       toast.warning("Tracking number captured — not ready to dispatch", { description: blockers[0] })
       return
     }
-    void form.handleSubmit(submit)()
+    void run(value, dispatchPicks)
   }
 
   async function run(trackingNumber: string, picksToSend: DispatchPick[]) {
@@ -224,10 +216,6 @@ export function DispatchOrderClient({
       router.push("/fulfillment/dispatch")
     })
   }
-
-  // Registered after run(): the listener's callback reaches it through
-  // handleScan -> submit, and the compiler wants it declared first.
-  useBarcodeScanner((value) => void handleScan(value), !isPending)
 
   const trackingValue = useWatch({ control: form.control, name: "tracking_number" })?.trim() ?? ""
 
@@ -326,7 +314,9 @@ export function DispatchOrderClient({
               <>
                 <CheckCircle2 className="size-4 text-success-foreground" />
                 <span className="text-muted-foreground">
-                  {editingTracking ? "Tracking number captured" : "Tracking number recorded when the label was booked"}
+                  {trackingValue === existingTracking
+                    ? "Tracking number recorded when the label was booked"
+                    : "Tracking number captured"}
                 </span>
               </>
             ) : (
@@ -336,7 +326,7 @@ export function DispatchOrderClient({
                   <span className="relative inline-flex size-2.5 rounded-full bg-primary" />
                 </span>
                 <span className="font-medium text-foreground">Ready — scan the tracking label</span>
-                <span className="text-muted-foreground">or type it below</span>
+                <span className="text-muted-foreground">or type it and press Enter</span>
               </>
             )}
           </div>
@@ -352,11 +342,10 @@ export function DispatchOrderClient({
                     <FormControl>
                       <Input
                         {...field}
-                        ref={(element) => {
-                          field.ref(element)
-                          trackingRef.current = element
-                        }}
-                        readOnly={!editingTracking}
+                        autoFocus
+                        // Selected on focus, so a scan replaces what is there
+                        // instead of appending to it.
+                        onFocus={(event) => event.currentTarget.select()}
                         placeholder="Tracking number"
                         aria-label="Tracking number"
                         autoComplete="off"
@@ -364,12 +353,6 @@ export function DispatchOrderClient({
                       />
                     </FormControl>
                   </div>
-                  {editingTracking ? null : (
-                    <Button type="button" variant="outline" className="h-12 px-4 text-base" onClick={startReentry}>
-                      <RotateCcw className="size-5" />
-                      Re-enter
-                    </Button>
-                  )}
                 </div>
                 <FormMessage />
               </FormItem>
