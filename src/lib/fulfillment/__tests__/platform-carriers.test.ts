@@ -37,12 +37,33 @@ describe("carrierFromTrackingNumber", () => {
 })
 
 describe("resolveShipment", () => {
-  it("never sends a tracking number for a letter", () => {
-    expect(resolveShipment(order("Letter", "99721681914001000830906"))).toEqual({ tracked: false })
+  it("sends a letter's invoice number as Australia Post's tracking number", () => {
+    expect(resolveShipment(order("Letter", "2603247F"))).toEqual({
+      tracked: true,
+      carrier: "australia_post",
+      trackingNumber: "2603247F",
+    })
   })
 
-  it("treats the invoice number in the tracking field as no number", () => {
+  it("sends a letter's real article id under Australia Post", () => {
+    expect(resolveShipment(order("Letter", "99721681914001000830906"))).toEqual({
+      tracked: true,
+      carrier: "australia_post",
+      trackingNumber: "99721681914001000830906",
+    })
+  })
+
+  it("rejects an Aramex number on a letter", () => {
+    expect(() => resolveShipment(order("Letter", "MS0020719756"))).toThrow(UnmappableShipmentError)
+  })
+
+  it("treats a letter with no number as untracked", () => {
+    expect(resolveShipment(order("Letter", null))).toEqual({ tracked: false })
+  })
+
+  it("treats the invoice number in the tracking field as no number for other methods", () => {
     expect(resolveShipment(order("Parcel_Post", "260322d5", "260322D5"))).toEqual({ tracked: false })
+    expect(resolveShipment(order("Register_Letter", "2603247F"))).toEqual({ tracked: false })
   })
 
   it("treats a missing number as untracked", () => {

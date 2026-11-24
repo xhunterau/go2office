@@ -92,10 +92,11 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
   - 只有一个能覆盖需求的库位时直接显示库位名；有多个库位，或没有能覆盖的库位时，显示下拉框让人选。
   - 库存不足的行高亮显示。扳手菜单可以就地 `Count stock` / `Move stock` / `Receive stock`。
   - 页面只记住操作人改过的选择，其余行每次都从当前库存重新推算默认库位。所以盘点之后，原来没有可用库位的行会自动选上。
+- **Letter 默认以发票号为运单号**（2026-11-25 用户决策）：`shipping_method = 'Letter'` 且订单没有运单号时，输入框预填 `invoice_number`，提示 `Letter — invoice number used as the tracking number`，直接回车即可发货；回传时以 Australia Post 发出（见 §5.7 决策 5）。`Register_Letter` 有真实单号，不预填。逻辑在 `src/lib/fulfillment/dispatch.ts` 的 `defaultTrackingNumber()` / `invoiceScanProblem()`。
 - **运单号：和搜索页一样靠输入框焦点**（2026-11-25 用户决策，取代 2026-11-18 的全局扫码监听）。详情页的运单号输入框 `autoFocus`、聚焦时全选，扫码枪直接打进去，结尾的 Enter 提交表单。
   - 改动原因：原先的 `useBarcodeScanner` 靠按键间隔（> 50ms 重新开始，结尾 Enter 也要在 50ms 内）区分扫码枪与人手，实际使用中扫码没有反应。该 hook 与 `src/lib/scanner/scan-buffer.ts` 已删除。
   - 代价：平板上聚焦会弹出软键盘；点了页面别处（库位下拉框、扳手菜单）后焦点离开输入框，扫码前要先点回输入框。
-  - 扫码、手输回车、点 `Dispatch` 走同一个提交函数，检查依次是：形如发票号（8 位十六进制）的不当运单号——是本单就提示已打开，是别的单就给一个 `Open it` 跳转，输入框恢复原值并全选；订单已有运单号且提交的值不包含它时，先确认是否替换，取消则恢复原值；还有 blocker 时 toast 提示第一条原因、不提交；其余调起 `Dispatch` 确认框。
+  - 扫码、手输回车、点 `Dispatch` 走同一个提交函数，检查依次是：形如发票号（8 位十六进制）的不当运单号——是本单就提示已打开（Letter 单的本单发票号除外，直接放行），是别的单就给一个 `Open it` 跳转，输入框恢复默认值并全选；订单已有运单号且提交的值不包含它时，先确认是否替换，取消则恢复原值；还有 blocker 时 toast 提示第一条原因、不提交；其余调起 `Dispatch` 确认框。
   - 订单已有运单号时（Aramex 下单时会写入），输入框预填它并全选：直接回车或点 `Dispatch` 沿用原值，扫新面单则覆盖。发票号检查只针对新输入的值，因为部分历史订单的运单号栏本来就是发票号（规则 27）。
 - 点 `Dispatch` 会先弹出 `useConfirm` 确认框（规则 9）。成功后 toast 提示，并回到 `/fulfillment/dispatch`。
 - 布局面向平板（2026-11-18）：两页都居中（搜索页 `max-w-xl`、详情页 `max-w-3xl`），商品是卡片而不是表格，运单号与 `Dispatch` 按钮固定在屏幕底部。
@@ -183,7 +184,7 @@ xpros 的 `completePackingAction` 是分开写的（先 update 状态和运单�
 
 | # | 问题 | 决定 |
 |---|---|---|
-| 5 | 没有真实运单号的单（Letter；或运单号栏填的是发票号，历史上 Letter / Parcel_Post 都这样） | **只标记已发货、不带运单号**。实测 Laravel 回写 eBay 时就是这样做的（`fulfillmentId: "999"`，无运单号） |
+| 5 | 没有真实运单号的单（Letter；或运单号栏填的是发票号，历史上 Letter / Parcel_Post 都这样） | **只标记已发货、不带运单号**。实测 Laravel 回写 eBay 时就是这样做的（`fulfillmentId: "999"`，无运单号）。**2026-11-25 起 Letter 例外**：`METHOD_CARRIER.Letter` 改为 `australia_post`，发票号作为澳邮运单号回传（用户决策；`usesInvoiceAsTracking()`）。买家点追踪链接查不到，这是已知并接受的代价。其余方式运单号栏是发票号时仍只标记已发货 |
 | 6 | `Click_and_Collect` / `Store_Delivery` 的承运商 | **按运单号前缀判断**：`MS`/`MP` → Aramex；`33XXX`/`RPP`/`TMP`/`99…` → 澳邮；认不出 → 只标记已发货 |
 | 7 | eBay 的 Aramex 承运商代码 | **`FASTWAYCOURIERS`**（2026-11-18 确认）。eBay 澳洲站承运商列表（Trading API `GeteBayDetails` / `ShippingCarrierDetails`，SiteID 15，共 35 项）里没有 Aramex；Fastway 是 Aramex Australia 2022 年更名前的品牌，fastway.com.au 已跳转到 aramex.com.au/tools/track。全局枚举里的 `ARAMEX` 不在澳洲站列表中，不用 |
 

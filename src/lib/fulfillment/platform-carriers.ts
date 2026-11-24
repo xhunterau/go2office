@@ -1,4 +1,5 @@
 import type { ShippingMethod } from "@/lib/orders/shipping-method"
+import { usesInvoiceAsTracking } from "@/lib/fulfillment/dispatch"
 
 // What to tell Shopify and eBay about a dispatched parcel: which carrier, and
 // whether there is a tracking number at all. See docs/order-dispatch.md §5.
@@ -29,9 +30,10 @@ export class UnmappableShipmentError extends Error {}
  * it is given a row here.
  */
 const METHOD_CARRIER: Record<ShippingMethod, Carrier | "by_prefix" | "untracked"> = {
-  // Stamped letters. Historically the "tracking number" field holds the invoice
-  // number (2,285 of 2,690 eBay letters in the last year).
-  Letter: "untracked",
+  // Stamped letters. The "tracking number" field holds the invoice number
+  // (2,285 of 2,690 eBay letters in the last year, and the dispatch page's
+  // default), which is sent as Australia Post's (user decision, 2026-11-25).
+  Letter: "australia_post",
   Register_Letter: "australia_post",
   Parcel_Post: "australia_post",
   Express_Post: "australia_post",
@@ -85,9 +87,10 @@ export function carrierFromTrackingNumber(trackingNumber: string): Carrier | nul
  * The shipment to report for a dispatched order.
  *
  * Untracked when the method never has a number, or when the stored number is
- * really the invoice number (how letters and some parcels were recorded) --
- * sending that to a buyer as a tracking number would be worse than none (user
- * decision, 2026-11-16).
+ * really the invoice number (how some parcels were recorded) -- sending that to
+ * a buyer as a tracking number would be worse than none (user decision,
+ * 2026-11-16). Letter is the exception: its invoice number is sent as Australia
+ * Post's tracking number (user decision, 2026-11-25; usesInvoiceAsTracking).
  *
  * When both the method and the number's format name a carrier and they
  * disagree, it throws rather than picking one.
@@ -101,7 +104,12 @@ export function resolveShipment(order: {
   const rule = order.shipping_method === null ? "by_prefix" : METHOD_CARRIER[order.shipping_method]
 
   if (rule === "untracked" || tn === null) return { tracked: false }
-  if (tn.toUpperCase() === order.invoice_number.trim().toUpperCase()) return { tracked: false }
+  if (
+    tn.toUpperCase() === order.invoice_number.trim().toUpperCase() &&
+    !usesInvoiceAsTracking(order)
+  ) {
+    return { tracked: false }
+  }
 
   const fromNumber = carrierFromTrackingNumber(tn)
 

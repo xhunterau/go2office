@@ -25,8 +25,11 @@ import { dispatchOrder } from "@/lib/actions/dispatch"
 import { usableAddressLines } from "@/lib/fulfillment/csv"
 import {
   defaultPicks,
+  defaultTrackingNumber,
   findShortages,
+  invoiceScanProblem,
   toDispatchPicks,
+  usesInvoiceAsTracking,
   type DispatchPick,
   type PickChoice,
 } from "@/lib/fulfillment/dispatch"
@@ -39,13 +42,6 @@ import type { OrderDetail } from "@/lib/queries/orders"
 import { trackingFormSchema, type TrackingFormValues } from "@/lib/validations/dispatch"
 
 import { DispatchItemsList } from "./dispatch-items-list"
-
-/**
- * Two-digit year + six upper-case hex digits (format_invoice_number). A scan of
- * that shape is the packing slip, not the label, and must never be saved as a
- * tracking number.
- */
-const INVOICE_PATTERN = /^[0-9A-F]{8}$/i
 
 /**
  * Pick and pack as one step: confirm where each item comes from, scan the
@@ -100,12 +96,14 @@ export function DispatchOrderClient({
 
   // An existing number (Aramex writes one when it books) is prefilled and
   // selected, so scanning the label overwrites it and pressing Enter keeps it.
+  // A Letter with none starts from its invoice number (defaultTrackingNumber).
   const existingTracking = order.tracking_number?.trim() || null
+  const invoiceAsTracking = usesInvoiceAsTracking(order)
   const [busy, setBusy] = React.useState(false)
 
   const form = useForm<TrackingFormValues>({
     resolver: zodResolver(trackingFormSchema),
-    defaultValues: { tracking_number: existingTracking ?? "" },
+    defaultValues: { tracking_number: defaultTrackingNumber(order) },
   })
 
   /** Back to the input with its text selected, ready for the next scan. */
@@ -133,17 +131,16 @@ export function DispatchOrderClient({
     const value = values.tracking_number
     const keepsExisting = existingTracking !== null && value === existingTracking
 
-    // Some historical orders carry their invoice number as the tracking number
-    // (rule 27), so only a newly entered value is checked against the pattern.
-    if (!keepsExisting && INVOICE_PATTERN.test(value)) {
-      if (value.toUpperCase() === order.invoice_number.toUpperCase()) {
+    const problem = invoiceScanProblem(value, order, keepsExisting)
+    if (problem !== null) {
+      if (problem === "this_order") {
         toast.message("This order is already open", { description: "Now scan the tracking number on the label." })
       } else {
         toast.warning(`That is invoice ${value.toUpperCase()}, not a tracking number`, {
           action: { label: "Open it", onClick: () => router.push(`/fulfillment/dispatch?q=${encodeURIComponent(value)}`) },
         })
       }
-      rearm(existingTracking ?? "")
+      rearm(defaultTrackingNumber(order))
       return
     }
 
@@ -316,7 +313,9 @@ export function DispatchOrderClient({
                 <span className="text-muted-foreground">
                   {trackingValue === existingTracking
                     ? "Tracking number recorded when the label was booked"
-                    : "Tracking number captured"}
+                    : invoiceAsTracking && trackingValue.toUpperCase() === order.invoice_number.toUpperCase()
+                      ? "Letter — invoice number used as the tracking number"
+                      : "Tracking number captured"}
                 </span>
               </>
             ) : (

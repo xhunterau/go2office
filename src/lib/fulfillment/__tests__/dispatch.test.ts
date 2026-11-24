@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest"
 import {
   defaultPickLocation,
   defaultPicks,
+  defaultTrackingNumber,
   findShortages,
+  invoiceScanProblem,
   needsLocationChoice,
   toDispatchPicks,
   type DispatchLine,
@@ -113,5 +115,55 @@ describe("toDispatchPicks", () => {
 
   it("is null while a line has no location", () => {
     expect(toDispatchPicks(lines, new Map([[10, 1], [11, null]]))).toBeNull()
+  })
+})
+
+describe("defaultTrackingNumber", () => {
+  const order = (
+    shipping_method: Parameters<typeof defaultTrackingNumber>[0]["shipping_method"],
+    tracking_number: string | null
+  ) => ({ shipping_method, tracking_number, invoice_number: "2603247F" })
+
+  it("starts a letter from its invoice number", () => {
+    expect(defaultTrackingNumber(order("Letter", null))).toBe("2603247F")
+    expect(defaultTrackingNumber(order("Letter", "  "))).toBe("2603247F")
+  })
+
+  it("keeps a number the order already has", () => {
+    expect(defaultTrackingNumber(order("Letter", " 33GLH0035717 "))).toBe("33GLH0035717")
+    expect(defaultTrackingNumber(order("Aramex_Parcel", "MS0020719756"))).toBe("MS0020719756")
+  })
+
+  it("leaves every other method empty, registered letters included", () => {
+    expect(defaultTrackingNumber(order("Register_Letter", null))).toBe("")
+    expect(defaultTrackingNumber(order("Parcel_Post", null))).toBe("")
+    expect(defaultTrackingNumber(order(null, null))).toBe("")
+  })
+})
+
+describe("invoiceScanProblem", () => {
+  const letter = { shipping_method: "Letter" as const, invoice_number: "2603247F" }
+  const parcel = { shipping_method: "Parcel_Post" as const, invoice_number: "2603247F" }
+
+  it("lets a letter use its own invoice number, in any case", () => {
+    expect(invoiceScanProblem("2603247F", letter, false)).toBeNull()
+    expect(invoiceScanProblem("2603247f", letter, false)).toBeNull()
+  })
+
+  it("flags the order's own invoice on anything but a letter", () => {
+    expect(invoiceScanProblem("2603247F", parcel, false)).toBe("this_order")
+    expect(
+      invoiceScanProblem("2603247F", { ...parcel, shipping_method: "Register_Letter" }, false)
+    ).toBe("this_order")
+  })
+
+  it("flags another order's invoice, letters included", () => {
+    expect(invoiceScanProblem("2603247B", letter, false)).toBe("other_order")
+    expect(invoiceScanProblem("2603247B", parcel, false)).toBe("other_order")
+  })
+
+  it("lets the stored number through and ignores non-invoice values", () => {
+    expect(invoiceScanProblem("2603247F", parcel, true)).toBeNull()
+    expect(invoiceScanProblem("33GLH0035717", parcel, false)).toBeNull()
   })
 })

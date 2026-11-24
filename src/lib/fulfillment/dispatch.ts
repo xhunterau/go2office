@@ -4,6 +4,8 @@
 // locks, so nothing here is trusted for correctness -- it only decides what the
 // page shows and pre-selects.
 
+import type { ShippingMethod } from "@/lib/orders/shipping-method"
+
 /** One order_items row to be picked. */
 export type DispatchLine = {
   id: number
@@ -122,4 +124,51 @@ export function toDispatchPicks(lines: DispatchLine[], picks: PickChoice): Dispa
     result.push({ order_item_id: line.id, location_id: locationId })
   }
   return result
+}
+
+/**
+ * Two-digit year + six upper-case hex digits (format_invoice_number). A scan of
+ * that shape is usually the packing slip, not the label.
+ */
+const INVOICE_PATTERN = /^[0-9A-F]{8}$/i
+
+/**
+ * A stamped letter has no label to scan, so its invoice number stands in as the
+ * tracking number and is sent to the platforms as Australia Post's (user
+ * decision, 2026-11-25; platform-carriers.ts). Register_Letter is not included:
+ * it carries a real article id.
+ */
+export function usesInvoiceAsTracking(order: { shipping_method: ShippingMethod | null }): boolean {
+  return order.shipping_method === "Letter"
+}
+
+/** What the dispatch page's tracking field starts with. */
+export function defaultTrackingNumber(order: {
+  shipping_method: ShippingMethod | null
+  tracking_number: string | null
+  invoice_number: string
+}): string {
+  const existing = order.tracking_number?.trim()
+  if (existing) return existing
+  return usesInvoiceAsTracking(order) ? order.invoice_number : ""
+}
+
+/**
+ * Why a submitted value must not be saved as this order's tracking number
+ * because it is an invoice number, or null when it may be.
+ *
+ *   "this_order"  -- the order's own invoice on a parcel (the slip was scanned);
+ *   "other_order" -- another order's invoice: that order is the one to open.
+ *
+ * `keepsExisting` exempts the stored number: some historical orders carry their
+ * invoice number in the tracking field already (rule 27).
+ */
+export function invoiceScanProblem(
+  value: string,
+  order: { shipping_method: ShippingMethod | null; invoice_number: string },
+  keepsExisting: boolean
+): "this_order" | "other_order" | null {
+  if (keepsExisting || !INVOICE_PATTERN.test(value)) return null
+  if (value.toUpperCase() !== order.invoice_number.toUpperCase()) return "other_order"
+  return usesInvoiceAsTracking(order) ? null : "this_order"
 }
