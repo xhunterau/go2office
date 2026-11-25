@@ -7,7 +7,7 @@
 | 项目 | `go2office`（ref `proj_wwabgtzjdqddykvvvpxx`，Xhunter AU 组织下） |
 | SDK | `@trigger.dev/sdk` v4（**导入路径必须是包根，严禁 `@trigger.dev/sdk/v3`**） |
 | 配置 | [trigger.config.ts](../trigger.config.ts) —— `runtime: "node-24"`，`dirs: ["./src/trigger"]` |
-| 环境 | **staging**（`TRIGGER_SECRET_KEY` 是 `tr_stg_` 前缀）。查 run / deploy 时选 staging，选 dev 会显示 0 条 |
+| 环境 | **production**（2026-11-25 核实：真实的 `push-platform-fulfillment` / `sweep-platform-fulfillment` run 都在 prod）。查 run / deploy 时选 prod。staging 与 prod 很可能连同一个数据库，所以会写库的定时任务只在一个环境跑（见 `scheduled-order-import`）。部署两个环境都要做：`NODE_OPTIONS=--no-network-family-autoselection npx trigger.dev@4.8.5 deploy --env prod`（`--env staging` 同理） |
 | 本地开发 | `npm run trigger:dev`（CLI 自动读 `.env.local`，无需 `--env-file`）。脚本带 `NODE_OPTIONS=--no-network-family-autoselection`：WSL 下 Node 的 IPv4/IPv6 自动选择会让连 Shopify 的请求 `ETIMEDOUT`（curl 0.19 秒能连上，2026-11-11 实测），去掉这个参数本地导入就会失败 |
 | ⚠️ 新 Task 必须先 deploy 才跑得起来 | **`trigger.dev dev` 在 staging key 下不接管 run。**2026-08-29 实测：本地 worker 注册了版本 `20260829.1`，但 staging 的 current worker 仍是部署版 `20260823.1`，于是新 Task 的 run 一直停在 `PENDING_VERSION`，两次触发都是。要让一个新 Task 能跑，得 `npx trigger.dev deploy`。**卡住的 run TTL 默认 14 天**——不取消的话，下次部署会把它们同时放行，同一张订单被灌两批数据 |
 
@@ -199,7 +199,7 @@ Task 内用 **service role key** 建 Supabase 客户端——9 张运费相关�
 | `maxDuration` | 600 秒 |
 | `queue` | `concurrencyLimit: 1` |
 | `retry` | **`maxAttempts: 1`**：重跑本身是安全的（已导入的会被识别为重复），但会把第一次的失败藏起来 |
-| 触发条件 | `/orders` 页头的 `Import from Shopify` 按钮（`triggerShopifyImport()` Server Action），只能手工触发。`/settings/debug` 的 `shopify_import_test_order` 开着时，Action 在触发那一刻读它并带上 `testOrder`，只导那一张（[shopify-order-import.md §7](shopify-order-import.md)）；读开关失败则**不触发**（关 = 全量，不能把读不到当成关） |
+| 触发条件 | `/orders` 页头的 `Import from Shopify` 按钮（`triggerShopifyImport()` Server Action），以及 `scheduled-order-import` 每小时一次（墨尔本 07:00–23:00，不带 `userId`）。`/settings/debug` 的 `shopify_import_test_order` 开着时，Action 在触发那一刻读它并带上 `testOrder`，只导那一张（[shopify-order-import.md §7](shopify-order-import.md)）；读开关失败则**不触发**（关 = 全量，不能把读不到当成关） |
 
 ### 入参 / 返回
 
@@ -267,7 +267,7 @@ Task 自己一行都不写，**全部经 `import_shopify_order()`，每张 Shopi
 | `maxDuration` | 600 秒 |
 | `queue` | `concurrencyLimit: 1` |
 | `retry` | **`maxAttempts: 1`**：同 `import-shopify-orders` |
-| 触发条件 | `/orders` 页头的 `Import from eBay` 按钮（`triggerEbayImport()`），只能手工触发。`/settings/debug` 的 `ebay_import_test_order` 开着时只导那一张（值为 eBay 订单号 `17-15414-28640`）；读开关失败则**不触发**。授权缺失 / 多账号 / 已过期时按钮被禁用 |
+| 触发条件 | `/orders` 页头的 `Import from eBay` 按钮（`triggerEbayImport()`），以及 `scheduled-order-import` 每小时一次（墨尔本 07:00–23:00，不带 `userId`）。`/settings/debug` 的 `ebay_import_test_order` 开着时只导那一张（值为 eBay 订单号 `17-15414-28640`）；读开关失败则**不触发**。授权缺失 / 多账号 / 已过期时按钮被禁用 |
 
 ### 入参 / 返回
 
@@ -363,3 +363,23 @@ Debug 导入 `20-15407-95810` → fetched 1 / imported 1（订单 206029，SKU �
 失败 3 次后不再自动重试，留在 `/fulfillment/dispatch` 页的「Shopify / eBay updates failed」列表里，由人点 Retry。
 
 **⚠️ 两个 Task 都需要 `npx trigger.dev deploy` 到 staging 后才会运行**（见文首）。
+
+---
+
+## `scheduled-order-import`（定时任务）
+
+墨尔本时间每天 07:00 到 23:00 每个整点（共 17 次）触发一次 `import-shopify-orders` 与 `import-ebay-orders`（2026-11-25 用户决策）。本身不导任何订单，只负责触发。
+
+| | |
+|---|---|
+| Job ID | `scheduled-order-import` |
+| 源文件 | [src/trigger/scheduled-order-import.ts](../src/trigger/scheduled-order-import.ts) |
+| cron | `0 7-23 * * *`，`timezone: "Australia/Melbourne"`（夏令时由 Trigger.dev 处理），**只在 PRODUCTION**（用户决策）：staging 很可能与 prod 共用数据库，两边都跑等于每小时导两遍；本地 `trigger dev` 也不跑 |
+| `maxDuration` / `retry` | 60 秒 / `maxAttempts: 1` |
+| 触发方式 | `importShopifyOrdersTask.trigger({})` / `importEbayOrdersTask.trigger({})`，fire-and-forget，**不**用 `triggerAndWait`。两个导入任务各自 `concurrencyLimit: 1`，所以手动导入正在跑时，定时这次会排队等它，不会并发 |
+| 去重 | 幂等键 `scheduled-import:<platform>:<计划时间 ISO>`，`scope: "global"`：重跑同一个整点不会再触发一次导入 |
+| 操作人 | 不传 `userId`，`order_logs.user_id` 为 NULL——以此区分定时导入与按按钮 |
+| 调试开关 | `/settings/debug` 的 `shopify_import_test_order` / `ebay_import_test_order` 开着时，**跳过该平台这一次**（用户决策），避免测试期间后台全量导入；读开关失败也跳过 |
+| 返回 | `{ shopify, ebay }`，每项为 `triggered`（带子 run id）、`skipped`（带原因）或 `failed`。任一平台触发失败则本 run 失败 |
+
+**失败提醒：暂不做**（用户决策，2026-11-25）。子任务失败（如 eBay 授权过期 `EbayReauthorizationRequired`）只在 Trigger.dev 控制台（prod）可见，页面上没有提示。
