@@ -18,6 +18,7 @@ import {
   EPARCEL_METHODS,
   MYPOST_METHODS,
   SELF_PRINT_METHODS,
+  UBI_METHODS,
 } from "@/lib/fulfillment/carrier-groups"
 import {
   buildAlerts,
@@ -178,6 +179,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     myPost,
     eParcel,
     aramex,
+    ubi,
     statusCounts,
     failedSyncs,
     staleSyncs,
@@ -196,6 +198,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     countDispatchableOrders(client, MYPOST_METHODS),
     countDispatchableOrders(client, EPARCEL_METHODS),
     countDispatchableOrders(client, ARAMEX_METHODS),
+    countDispatchableOrders(client, UBI_METHODS),
     fetchOrderStatusCounts(client),
     fetchFailedSyncOrders(client, SAMPLE_SIZE),
     countStalePendingSyncs(client, now),
@@ -216,6 +219,7 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     myPost.error,
     eParcel.error,
     aramex.error,
+    ubi.error,
     statusCounts.error,
     failedSyncs.error,
     staleSyncs.error,
@@ -230,12 +234,13 @@ export async function loadDashboard(client: Client, now: number = Date.now()): P
     { label: "MyPost", count: myPost.data ?? 0 },
     { label: "eParcel", count: eParcel.data ?? 0 },
     { label: "Aramex", count: aramex.data ?? 0 },
+    { label: "UBI", count: ubi.data ?? 0 },
   ]
   const processingCount = processing.data?.count ?? 0
   const channelTotal = channels.reduce((sum, channel) => sum + channel.count, 0)
   // Only meaningful when every count loaded; a failed channel query would
   // otherwise read as that many orders with no channel.
-  const channelsLoaded = [selfPrint, myPost, eParcel, aramex, processing].every((r) => r.error == null)
+  const channelsLoaded = [selfPrint, myPost, eParcel, aramex, ubi, processing].every((r) => r.error == null)
   const unroutedProcessing = channelsLoaded ? Math.max(0, processingCount - channelTotal) : 0
 
   const pendingTotal = statusCounts.counts?.byStatus.pending ?? 0

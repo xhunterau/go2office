@@ -1950,6 +1950,7 @@ export type Database = {
         | "Click_and_Collect"
         | "Aramex_Parcel"
         | "Aramex_Satchel"
+        | "Ubi"
     }
     CompositeTypes: {
       [_ in never]: never

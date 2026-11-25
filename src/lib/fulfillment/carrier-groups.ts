@@ -61,6 +61,12 @@ export const ARAMEX_METHODS = [
 ] as const satisfies readonly ShippingMethod[]
 
 /**
+ * Uploaded to UBI's portal as its 80-column bulk-order CSV (ubi-csv.ts). UBI
+ * hands the parcel to Australia Post for delivery.
+ */
+export const UBI_METHODS = ["Ubi"] as const satisfies readonly ShippingMethod[]
+
+/**
  * Methods with no label channel, and why:
  *
  *   Direct_Freight        carrier not carried by go2office, 0 orders
@@ -80,6 +86,7 @@ type RoutedMethod =
   | (typeof MYPOST_METHODS)[number]
   | (typeof EPARCEL_METHODS)[number]
   | (typeof ARAMEX_METHODS)[number]
+  | (typeof UBI_METHODS)[number]
   | (typeof UNROUTED_METHODS)[number]
 
 // Compile-time exhaustiveness: adding a value to the shipping_method enum

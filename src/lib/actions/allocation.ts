@@ -24,11 +24,14 @@ import {
 } from "@/lib/shipping/adapters/zone-resolver"
 import {
   allocationAddressSchema,
+  holdStatusSchema,
   manualApprovalSchema,
   type AllocationAddressInput,
+  type HoldStatus,
   type ManualApprovalInput,
 } from "@/lib/validations/allocation"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
+import { ORDER_STATUS_LABELS } from "@/lib/orders/status"
 // A type-only import: the task module pulls in the quote engine and the
 // service-role Supabase client, and bundling that into the Next.js build would
 // ship the service-role path to the server bundle for no reason. The string id
@@ -558,6 +561,59 @@ export async function approveWithoutQuote(
     supabase,
     orderId,
     `Allocation approved by hand: ${SHIPPING_METHOD_LABELS[shipping_method]} at $${postage_paid.toFixed(2)} (entered, not quoted). Order moved to ${APPROVED_STATUS}.`,
+    user.id
+  )
+
+  revalidate(orderId)
+  return { success: true, data: { warning } }
+}
+
+/**
+ * Takes an order out of the Postage queue without approving it: on backorder
+ * (waiting on stock) or issued (something to sort out first).
+ *
+ * Only the status changes. shipping_method, postage_paid and the quote rows are
+ * left as they are, so when the order comes back to `pending` it is approved
+ * from scratch. No requireItems(): the order is not heading for a label.
+ *
+ * The `status = pending` guard is the same concurrency check moveToProcessing
+ * uses -- an order somebody else moved a second ago, and an UPDATE refused by
+ * RLS (rule 22), both come back as no row.
+ */
+export async function holdOrder(
+  orderId: number,
+  status: HoldStatus
+): Promise<ActionResult<ApprovalResult>> {
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return { success: false, error: "Invalid order" }
+  }
+  const parsed = holdStatusSchema.safeParse(status)
+  if (!parsed.success) return { success: false, error: "Invalid status" }
+
+  const supabase = await createClient()
+  const user = await currentUser(supabase)
+  if (!user) return { success: false, error: "Your session has expired" }
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: parsed.data })
+    .eq("id", orderId)
+    .eq("status", ALLOCATION_STATUS)
+    .select("id")
+    .maybeSingle()
+
+  if (error) return { success: false, error: error.message }
+  if (!data) {
+    return {
+      success: false,
+      error: "This order is no longer waiting for approval — it may have been moved already. Reload the page.",
+    }
+  }
+
+  const warning = await logAction(
+    supabase,
+    orderId,
+    `Allocation: order moved to ${ORDER_STATUS_LABELS[parsed.data]} instead of being approved.`,
     user.id
   )
 

@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { Loader2, MailOpen, Package, Printer, Truck } from "lucide-react"
+import { FileSpreadsheet, Loader2, MailOpen, Package, Printer, Truck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { useBatchRunPoll } from "@/hooks/use-batch-run-poll"
 import {
   exportEParcelCsv,
   exportMyPostCsv,
+  exportUbiCsv,
   getAramexBatchStatus,
   markSelfPrintLabelsPrinted,
   triggerAramexBatch,
@@ -21,7 +22,7 @@ import type { ActionResult } from "@/lib/actions/action-result"
 import type { SubmitAramexBatchResult } from "@/trigger/submit-aramex-batch"
 import type { RunProgress } from "@/lib/trigger/run-status"
 
-type QueueKey = "self-print" | "mypost" | "eparcel" | "aramex"
+type QueueKey = "self-print" | "mypost" | "eparcel" | "aramex" | "ubi"
 
 // eParcel's importer reads a leading BOM as part of the first header, so the
 // mandatory C_CHARGE_CODE column arrives as "\uFEFFC_CHARGE_CODE", is not
@@ -30,6 +31,9 @@ type QueueKey = "self-print" | "mypost" | "eparcel" | "aramex"
 const CSV_BOM: Record<Exclude<QueueKey, "self-print" | "aramex">, boolean> = {
   mypost: true,
   eparcel: false,
+  // The headers are Chinese, so without a BOM Excel opens the file in the local
+  // codepage and every header is mojibake.
+  ubi: true,
 }
 
 function downloadCsv(csv: string, filename: string, withBom: boolean): void {
@@ -67,12 +71,14 @@ export function ExportLabelsClient({
   myPostCount,
   eParcelCount,
   aramexCount,
+  ubiCount,
   exportsDisabled,
 }: {
   selfPrintCount: number
   myPostCount: number
   eParcelCount: number
   aramexCount: number
+  ubiCount: number
   exportsDisabled: boolean
 }) {
   // The counts stay server state: each action revalidates the path and the
@@ -223,6 +229,17 @@ export function ExportLabelsClient({
             "Stopped waiting. The batch may still be running — reload the page to see the queue."
           )
         }
+      />
+
+      <QueueCard
+        icon={FileSpreadsheet}
+        title="UBI"
+        description="UBI's 80-column bulk-order CSV. One row per order, declared as one toy worth 1 AUD (origin CN) at the order's actual weight; the sender comes from the UBI account."
+        count={ubiCount}
+        actionLabel="Export CSV"
+        busy={busy === "ubi"}
+        disabled={busy != null || exportsDisabled}
+        onRun={() => runCsvExport("ubi", exportUbiCsv, "UBI")}
       />
     </div>
   )

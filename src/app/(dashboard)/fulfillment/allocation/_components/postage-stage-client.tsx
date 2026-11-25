@@ -23,15 +23,16 @@ import {
   approveQuotedOrder,
   approveWithoutQuote,
   getPostageCheckStatus,
+  holdOrder,
   triggerPostageCheck,
 } from "@/lib/actions/allocation"
 import { triggerShippingQuote } from "@/lib/actions/shipping-quote"
 import type { PostageStageOrder } from "@/lib/queries/allocation"
 import type { ShippingQuoteRow } from "@/lib/queries/shipping-quotes"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
-import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
+import { ORDER_STATUS_LABELS, SALES_PLATFORM_LABELS } from "@/lib/orders/status"
 import { formatDate, formatMoney, formatWeightKg } from "@/lib/format"
-import type { QuickApproval } from "@/lib/validations/allocation"
+import type { HoldStatus, QuickApproval } from "@/lib/validations/allocation"
 import type { BatchPostageCheckResult } from "@/trigger/batch-postage-check"
 
 import { InfoHint } from "./info-hint"
@@ -47,6 +48,7 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
   const [quickApproving, setQuickApproving] = React.useState<
     QuickApproval["shipping_method"] | null
   >(null)
+  const [holding, setHolding] = React.useState<HoldStatus | null>(null)
   const [manualOrder, setManualOrder] = React.useState<PostageStageOrder | null>(null)
   const [isStarting, startBatch] = React.useTransition()
 
@@ -159,6 +161,33 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
     router.refresh()
   }
 
+  async function handleHold(order: PostageStageOrder, status: HoldStatus) {
+    const label = ORDER_STATUS_LABELS[status]
+    const ok = await confirm({
+      title: `Move ${order.invoice_number} to ${label}?`,
+      description: `The order leaves this queue without being approved. Its shipping method and postage are left unchanged; set it back to Pending from the order page when it is ready to ship.`,
+      confirmText: `Move to ${label}`,
+    })
+    if (!ok) return
+
+    setHolding(status)
+    const result = await holdOrder(order.id, status)
+    setHolding(null)
+
+    if (!result.success) {
+      toast.error("The order could not be moved", { description: result.error })
+      return
+    }
+    toast.success(`${order.invoice_number} moved to ${label}`)
+    if (result.data?.warning) toast.warning(result.data.warning)
+    // Step on to the next order rather than closing: holds tend to come in runs
+    // (one product out of stock), and the dialog is where the operator works.
+    const index = orders.findIndex((o) => o.id === order.id)
+    const next = orders[index + 1] ?? orders[index - 1] ?? null
+    setOpenOrderId(next && next.id !== order.id ? next.id : null)
+    router.refresh()
+  }
+
   return (
     <div className="flex flex-1 flex-col gap-4">
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card px-4 py-3">
@@ -265,7 +294,7 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
           if (openOrder) void handleQuickApprove(openOrder, approval)
         }}
         requoting={openOrder !== null && requoting === openOrder.id}
-        disabled={busy || quickApproving !== null}
+        disabled={busy || quickApproving !== null || holding !== null}
         onApprove={(quote) => {
           if (openOrder) void handleApprove(openOrder, quote)
         }}
@@ -274,6 +303,10 @@ export function PostageStageClient({ orders }: { orders: PostageStageOrder[] }) 
         }}
         onManual={() => {
           if (openOrder) setManualOrder(openOrder)
+        }}
+        holding={holding}
+        onHold={(status) => {
+          if (openOrder) void handleHold(openOrder, status)
         }}
         onOpenChange={(open) => !open && setOpenOrderId(null)}
       />

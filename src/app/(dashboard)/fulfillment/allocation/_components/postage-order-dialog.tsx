@@ -11,6 +11,7 @@ import {
   Loader2,
   Mail,
   Package,
+  PackageX,
   Phone,
   RefreshCw,
   Ruler,
@@ -49,7 +50,11 @@ import type { ShippingQuoteRow } from "@/lib/queries/shipping-quotes"
 import { shortenItemTitle } from "@/lib/orders/item-title"
 import { SHIPPING_METHOD_LABELS } from "@/lib/orders/shipping-method"
 import { SALES_PLATFORM_LABELS } from "@/lib/orders/status"
-import { QUICK_APPROVALS, type QuickApproval } from "@/lib/validations/allocation"
+import {
+  QUICK_APPROVALS,
+  type HoldStatus,
+  type QuickApproval,
+} from "@/lib/validations/allocation"
 // The one implementation of "which of the four address lines belong on a
 // label". 114,161 of the 114,193 non-empty address_line3 values are `ebay:xxxx`
 // reference codes rather than addresses, so concatenating the columns puts an
@@ -92,6 +97,8 @@ export function PostageOrderDialog({
   onQuickApprove,
   onRequote,
   onManual,
+  holding,
+  onHold,
   onOpenChange,
 }: {
   order: PostageStageOrder | null
@@ -108,6 +115,9 @@ export function PostageOrderDialog({
   onQuickApprove: (approval: QuickApproval) => void
   onRequote: () => void
   onManual: () => void
+  /** The status this order is being moved to, if a hold is in flight. */
+  holding: HoldStatus | null
+  onHold: (status: HoldStatus) => void
   onOpenChange: (open: boolean) => void
 }) {
   // Carries the id it belongs to rather than being cleared when the id
@@ -281,6 +291,34 @@ export function PostageOrderDialog({
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {/* Not approvals: these take the order out of the queue to wait
+                  on stock or on the customer. */}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={disabled || holding !== null}
+                onClick={() => onHold("backorder")}
+              >
+                {holding === "backorder" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <PackageX className="size-3.5" />
+                )}
+                On backorder
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={disabled || holding !== null}
+                onClick={() => onHold("issued")}
+              >
+                {holding === "issued" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <AlertTriangle className="size-3.5" />
+                )}
+                Mark issued
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -772,7 +810,7 @@ function QuickApprovals({
       <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
         Without a rate
       </h3>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 sm:grid-cols-3">
         {QUICK_APPROVALS.map((approval) => (
           <div
             key={approval.shipping_method}

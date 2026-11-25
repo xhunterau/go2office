@@ -204,3 +204,31 @@ async function attachMetrics(
     error: null,
   }
 }
+
+/**
+ * Each order's first line's custom_label (lowest order_transactions.id), for
+ * exports that declare one SKU per parcel -- the UBI CSV. An order with no
+ * labelled line is simply absent from the map.
+ */
+export async function fetchFirstCustomLabels(
+  client: Client,
+  orderIds: readonly number[]
+): Promise<Loaded<Map<number, string>>> {
+  if (orderIds.length === 0) return { data: new Map(), error: null }
+
+  const { data, error } = await client
+    .from("order_transactions")
+    .select("order_id, custom_label")
+    .in("order_id", orderIds)
+    .not("custom_label", "is", null)
+    .order("id", { ascending: true })
+
+  if (error) return { data: null, error: error.message }
+
+  const first = new Map<number, string>()
+  for (const row of data ?? []) {
+    const label = row.custom_label?.trim()
+    if (label && !first.has(row.order_id)) first.set(row.order_id, label)
+  }
+  return { data: first, error: null }
+}

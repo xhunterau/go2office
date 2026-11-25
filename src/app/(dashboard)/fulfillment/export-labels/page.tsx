@@ -9,6 +9,7 @@ import {
   EPARCEL_METHODS,
   MYPOST_METHODS,
   SELF_PRINT_METHODS,
+  UBI_METHODS,
 } from "@/lib/fulfillment/carrier-groups"
 
 import { ExportLabelsClient } from "./_components/export-labels-client"
@@ -16,11 +17,12 @@ import { ExportLabelsClient } from "./_components/export-labels-client"
 export default async function ExportLabelsPage() {
   const supabase = await createClient()
 
-  const [selfPrint, mypost, eparcel, aramex, settings] = await Promise.all([
+  const [selfPrint, mypost, eparcel, aramex, ubi, settings] = await Promise.all([
     countDispatchableOrders(supabase, SELF_PRINT_METHODS),
     countDispatchableOrders(supabase, MYPOST_METHODS),
     countDispatchableOrders(supabase, EPARCEL_METHODS),
     countDispatchableOrders(supabase, ARAMEX_METHODS),
+    countDispatchableOrders(supabase, UBI_METHODS),
     fetchShippingSettings(supabase),
   ])
 
@@ -62,6 +64,7 @@ export default async function ExportLabelsPage() {
         myPostCount={mypost.data ?? 0}
         eParcelCount={eparcel.data ?? 0}
         aramexCount={aramex.data ?? 0}
+        ubiCount={ubi.data ?? 0}
         exportsDisabled={fallbackError != null}
       />
     </div>

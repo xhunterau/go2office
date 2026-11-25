@@ -42,6 +42,7 @@ export const SHIPPING_METHOD_LABELS: Record<ShippingMethod, string> = {
   Click_and_Collect: "Click and Collect",
   Aramex_Parcel: "Aramex Parcel",
   Aramex_Satchel: "Aramex Satchel",
+  Ubi: "UBI",
 }
 
 // Dropdown options, and the source z.enum validates against. Spelled out as a
@@ -82,6 +83,7 @@ export const SHIPPING_METHOD_OPTIONS = [
   "Click_and_Collect",
   "Aramex_Parcel",
   "Aramex_Satchel",
+  "Ubi",
 ] as const satisfies readonly ShippingMethod[]
 
 // How an order's carrier should be displayed. 173797 orders carry an enum

@@ -10,6 +10,7 @@ import type { ActionResult } from "@/lib/actions/action-result"
 import {
   countDispatchableOrders,
   fetchDispatchableOrders,
+  fetchFirstCustomLabels,
   LABELLED_STATUS,
   type DispatchOrder,
 } from "@/lib/queries/fulfillment"
@@ -19,6 +20,7 @@ import {
   EPARCEL_METHODS,
   MYPOST_METHODS,
   SELF_PRINT_METHODS,
+  UBI_METHODS,
 } from "@/lib/fulfillment/carrier-groups"
 // A type-only import: the task module pulls in the Aramex client and the
 // service-role Supabase client, and bundling that into the Next.js build would
@@ -32,7 +34,8 @@ import type {
 import { snapshotOf, type RunSnapshot } from "@/lib/trigger/run-status"
 import { exportFilename } from "@/lib/fulfillment/csv"
 import { buildMyPostCsv } from "@/lib/fulfillment/mypost-csv"
-import { buildEParcelCsv } from "@/lib/fulfillment/eparcel-csv"
+import { buildEParcelCsv, type BuiltCsv } from "@/lib/fulfillment/eparcel-csv"
+import { buildUbiCsv } from "@/lib/fulfillment/ubi-csv"
 import {
   requireFallbacks,
   senderFrom,
@@ -135,8 +138,11 @@ async function exportCsv(
     settings: NonNullable<
       Awaited<ReturnType<typeof fetchShippingSettings>>["data"]
     >,
-    fallbacks: { email: string; phone: string }
-  ) => { csv: string; truncated: string[] }
+    fallbacks: { email: string; phone: string },
+    supabase: Client
+    // Async with an `error` return for builders that load more than the queue
+    // (UBI's first SKU); a load failure is a message, not a mapping problem.
+  ) => BuiltCsv | Promise<BuiltCsv | { error: string }>
 ): Promise<ActionResult<CsvExportResult>> {
   const supabase = await createClient()
   const user = await currentUser(supabase)
@@ -156,9 +162,11 @@ async function exportCsv(
     return { success: false, error: "No orders are waiting on a label for this carrier." }
   }
 
-  let built: { csv: string; truncated: string[] }
+  let built: BuiltCsv
   try {
-    built = build(queue.data, settings.data, fallbacks.fallbacks)
+    const output = await build(queue.data, settings.data, fallbacks.fallbacks, supabase)
+    if ("error" in output) return { success: false, error: output.error }
+    built = output
   } catch (error) {
     if (error instanceof UnmappableOrderError) {
       return {
@@ -203,6 +211,26 @@ export async function exportEParcelCsv(): Promise<ActionResult<CsvExportResult>>
     "eParcel CSV exported",
     "eparcel_export",
     (orders, _settings, fallbacks) => buildEParcelCsv(orders, { fallbacks })
+  )
+}
+
+/**
+ * UBI's bulk-order CSV. One row per order declaring the first line's SKU, so
+ * those are loaded alongside the queue.
+ */
+export async function exportUbiCsv(): Promise<ActionResult<CsvExportResult>> {
+  return exportCsv(
+    UBI_METHODS,
+    "UBI CSV exported",
+    "ubi_export",
+    async (orders, _settings, fallbacks, supabase) => {
+      const skus = await fetchFirstCustomLabels(
+        supabase,
+        orders.map((order) => order.id)
+      )
+      if (!skus.data) return { error: skus.error ?? "Failed to load the order lines" }
+      return buildUbiCsv(orders, { fallbacks, firstSkus: skus.data })
+    }
   )
 }
 

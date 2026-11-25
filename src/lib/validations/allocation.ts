@@ -5,6 +5,7 @@ import {
   EPARCEL_METHODS,
   MYPOST_METHODS,
   SELF_PRINT_METHODS,
+  UBI_METHODS,
 } from "@/lib/fulfillment/carrier-groups"
 import type { ShippingMethod } from "@/lib/orders/shipping-method"
 
@@ -73,6 +74,7 @@ export const MANUAL_APPROVAL_METHODS = [
   ...MYPOST_METHODS,
   ...EPARCEL_METHODS,
   ...ARAMEX_METHODS,
+  ...UBI_METHODS,
 ] as const satisfies readonly ShippingMethod[]
 
 /**
@@ -90,6 +92,9 @@ export const MANUAL_APPROVAL_METHODS = [
 export const QUICK_APPROVALS = [
   { shipping_method: "Letter", postage_paid: 2.5 },
   { shipping_method: "Parcel_Post", postage_paid: 0 },
+  // Billed by UBI separately rather than per order, like Parcel Post's
+  // prepaid satchels (user decision, 2026-11-25).
+  { shipping_method: "Ubi", postage_paid: 0 },
 ] as const satisfies readonly {
   shipping_method: (typeof MANUAL_APPROVAL_METHODS)[number]
   postage_paid: number
@@ -119,3 +124,15 @@ export const manualApprovalSchema = z.object({
 })
 
 export type ManualApprovalInput = z.infer<typeof manualApprovalSchema>
+
+/**
+ * Statuses an operator may move an order to straight from the Postage dialog,
+ * instead of approving it: waiting on stock, or something to sort out with the
+ * customer. Both take the order out of the `pending` queue; neither touches its
+ * shipping method, postage or quotes, so approving it later starts clean.
+ */
+export const HOLD_STATUSES = ["backorder", "issued"] as const
+
+export const holdStatusSchema = z.enum(HOLD_STATUSES)
+
+export type HoldStatus = z.infer<typeof holdStatusSchema>

@@ -61,6 +61,9 @@ const METHOD_CARRIER: Record<ShippingMethod, Carrier | "by_prefix" | "untracked"
   Mypost_Exp_XL_Satchel: "australia_post",
   Aramex_Parcel: "aramex",
   Aramex_Satchel: "aramex",
+  // UBI's last mile is Australia Post, and its tracking numbers are looked up
+  // there (user decision, 2026-11-25).
+  Ubi: "australia_post",
   // History: Click_and_Collect numbers are all Australia Post; Store_Delivery
   // mixes Australia Post, Aramex and others (user decision, 2026-11-16).
   Store_Delivery: "by_prefix",

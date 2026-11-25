@@ -27,7 +27,7 @@
 
 ---
 
-## 2. 三个通道
+## 2. 标签通道
 
 | 通道 | shipping_method | 产物 | 入口 |
 |---|---|---|---|
@@ -35,6 +35,14 @@
 | MyPost Business | `MYPOST_METHODS`（22 个） | 23 列 CSV | `exportMyPostCsv()` |
 | eParcel | `EPARCEL_METHODS`（2 个） | 25 列 CSV + 一行 MANDATORY 注释行 | `exportEParcelCsv()` |
 | Aramex | `ARAMEX_METHODS`（2 个） | API 下单，无文件 | `triggerAramexBatch()` → `submit-aramex-batch` Task |
+| UBI | `UBI_METHODS`（`Ubi`） | 80 列中文表头 CSV（带 BOM） | `exportUbiCsv()` |
+
+### 2.1 UBI（2026-11-25 新增，迁移 `20261125100000`）
+
+- **入口**：Allocation 的 Postage 弹窗「Without a rate」区的快捷批准卡片，`postage_paid` 固定 $0.00（UBI 单独结算，同 Parcel Post）。没有费率表，报价引擎永远不会为它出价。
+- **CSV**：[ubi-csv.ts](../src/lib/fulfillment/ubi-csv.ts)，表头逐字取自 UBI 模板 `20251214.xlsx`，按表头名填值、不靠列位置。每单一行；申报固定为「玩具 / toy」、1 AUD、原产地 CN（用户决策，与模板样例一致）；重量用订单实重 `total_weight_kg`（kg，保留 3 位小数），与 eParcel 一致；SKU 取该单第一条明细（最小 `order_transactions.id`）的 `custom_label`。发件人列全部留空，由 UBI 账号提供。
+- **重量为 0 必须拦下**：抛 `UnmappableOrderError`，不申报 0 kg。
+- **平台回传**：`METHOD_CARRIER.Ubi = 'australia_post'`（UBI 末端由澳邮派送，用户决策）。
 
 两个 `shipping_method` 不属于任何通道，理由写在 [carrier-groups.ts](../src/lib/fulfillment/carrier-groups.ts) 的 `UNROUTED_METHODS`：`Direct_Freight`（决策 5）、`Click_and_Collect`（决策 6）。
 
@@ -161,4 +169,6 @@ MyPost 的尺寸只有 `Mypost_Regular` / `Mypost_Express`（自备包装）用�
 | **浏览器交互** | CSV 下载、PDF 打印视图、四张卡片的进度条仍需人工点一遍（移动端 + 桌面端，规则 12）。Aramex 卡片已于 2026-08-23 真实跑过一次 |
 | **Aramex 真实下单** | 会产生真实费用，需在有真实待发订单时验证。当前队列里 1 张 `Aramex_Satchel` |
 | ~~**Trigger.dev 部署环境变量**~~ | **2026-08-29 更正：已配置。** 08-23 那次真实下单就是跑在 staging 部署版 `v20260823.1` 上的——缺任何一个变量它都会立刻抛错 |
+| **UBI 运单号格式** | 尚未确认。若 UBI 面单是澳邮 GS1-128 条码且前缀不在 `normalize_tracking_number` 的规则里，扫码会以整串入库（规则 20），需补分支 |
+| **UBI 地址长度上限** | 模板未写明，暂按 3 × 60 字符切分，超出时页面会提示截断 |
 | **自印面单是否还要加别的 method** | 用户在选择时另选了「Other」但未填写内容，当前按上述 5 个实现 |
