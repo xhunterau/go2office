@@ -32,7 +32,7 @@ function order(overrides: Partial<DispatchOrder> = {}): DispatchOrder {
     },
     metrics: {
       total_weight_kg: 1.4,
-      chargeable_weight_kg: 2.2,
+      chargeable_weight_kg: 4.2,
       goods_total: 120,
       total_cost: 60,
       dominant_length_mm: 305,
@@ -127,9 +127,9 @@ describe("buildEParcelCsv", () => {
     expect(row[15]).toBe("INV-2001")
   })
 
-  it("declares the chargeable weight, rounded to the billing band", () => {
+  it("declares the dead weight, not the chargeable weight, rounded to the billing band", () => {
     const [row] = dataRows(build([order()]).csv)
-    // chargeable_weight_kg 2.2 falls in the 3kg band.
+    // total_weight_kg 1.4 falls in the 3kg band; chargeable_weight_kg 4.2 would be 5.
     expect(row[17]).toBe("3")
   })
 

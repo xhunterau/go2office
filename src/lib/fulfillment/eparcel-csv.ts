@@ -182,7 +182,11 @@ export function buildEParcelCsv(
     )
     if (address.overflow) truncated.push(order.invoice_number)
 
-    const weight = tieredWeight(Math.max(0, order.metrics.chargeable_weight_kg))
+    // Dead weight, not chargeable_weight_kg: the latter is volumetric off the
+    // pessimistic packed_* estimate (a quoting figure), while the dimensions
+    // below are dominant_* -- declaring one against the other overstates the
+    // parcel. Same pairing as the Aramex parcel booking.
+    const weight = tieredWeight(Math.max(0, order.metrics.total_weight_kg))
     const cover = transitCover(order.metrics.goods_total, order.metrics.total_cost)
 
     rows.push([
